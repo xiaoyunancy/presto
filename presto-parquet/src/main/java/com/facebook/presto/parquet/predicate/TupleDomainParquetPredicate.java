@@ -26,6 +26,7 @@ import com.facebook.presto.spi.type.Type;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
+import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import org.apache.parquet.column.ColumnDescriptor;
@@ -61,6 +62,9 @@ import static java.util.Objects.requireNonNull;
 public class TupleDomainParquetPredicate
         implements Predicate
 {
+
+    private static final Logger log = Logger.get(TupleDomainParquetPredicate.class);
+
     private final TupleDomain<ColumnDescriptor> effectivePredicate;
     private final List<RichColumnDescriptor> columns;
 
@@ -314,9 +318,15 @@ public class TupleDomainParquetPredicate
     private static void failWithCorruptionException(boolean failOnCorruptedParquetStatistics, String column, ParquetDataSourceId id, Statistics statistics)
             throws ParquetCorruptionException
     {
+        /*
         if (failOnCorruptedParquetStatistics) {
             throw new ParquetCorruptionException(format("Corrupted statistics for column \"%s\" in Parquet file \"%s\": [%s]", column, id, statistics));
         }
+        */
+        // ignore parquet corrupt statis
+        // change to warn log
+        log.warn(format("Corrupted statistics for column \"%s\" in Parquet file \"%s\": [%s]", column, id, statistics));
+
     }
 
     private static <T extends Comparable<T>> Domain createDomain(Type type, boolean hasNullValue, ParquetRangeStatistics<T> rangeStatistics)
