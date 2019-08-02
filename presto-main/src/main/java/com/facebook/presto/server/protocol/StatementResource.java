@@ -28,9 +28,13 @@ import com.google.common.collect.Ordering;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.concurrent.BoundedExecutor;
+import io.airlift.stats.CounterStat;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
+import org.weakref.jmx.Managed;
+import org.weakref.jmx.Nested;
 
+import javax.annotation.Nullable;
 import javax.annotation.PreDestroy;
 import javax.inject.Inject;
 import javax.servlet.http.HttpServletRequest;
@@ -66,6 +70,7 @@ import static com.facebook.presto.client.PrestoHeaders.PRESTO_CLEAR_TRANSACTION_
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_DEALLOCATED_PREPARE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SET_CATALOG;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SET_PATH;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_SET_ROLE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SET_SCHEMA;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SET_SESSION;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_STARTED_TRANSACTION_ID;
@@ -100,6 +105,8 @@ public class StatementResource
     private final ConcurrentMap<QueryId, Query> queries = new ConcurrentHashMap<>();
     private final ScheduledExecutorService queryPurger = newSingleThreadScheduledExecutor(threadsNamed("query-purger"));
 
+    private final CounterStat createQueryRequests = new CounterStat();
+
     @Inject
     public StatementResource(
             QueryManager queryManager,
@@ -133,6 +140,8 @@ public class StatementResource
             @Context HttpServletRequest servletRequest,
             @Context UriInfo uriInfo)
     {
+        createQueryRequests.update(1);
+
         if (isNullOrEmpty(statement)) {
             throw new WebApplicationException(Response
                     .status(Status.BAD_REQUEST)
@@ -163,10 +172,11 @@ public class StatementResource
     }
 
     @GET
-    @Path("{queryId}/{token}")
+    @Path("{queryId}/{slug}/{token}")
     @Produces(MediaType.APPLICATION_JSON)
     public void getQueryResults(
             @PathParam("queryId") QueryId queryId,
+            @PathParam("slug") String slug,
             @PathParam("token") long token,
             @QueryParam("maxWait") Duration maxWait,
             @QueryParam("targetResultSize") DataSize targetResultSize,
@@ -174,7 +184,7 @@ public class StatementResource
             @Context UriInfo uriInfo,
             @Suspended AsyncResponse asyncResponse)
     {
-        Query query = queries.get(queryId);
+        Query query = getQuery(queryId, slug);
         if (query == null) {
             asyncResponse.resume(Response.status(Status.NOT_FOUND).build());
             return;
@@ -184,6 +194,16 @@ public class StatementResource
         }
 
         asyncQueryResults(query, OptionalLong.of(token), maxWait, targetResultSize, uriInfo, proto, asyncResponse);
+    }
+
+    @Nullable
+    private Query getQuery(QueryId queryId, String slug)
+    {
+        Query query = queries.get(queryId);
+        if (query != null && query.isSlugValid(slug)) {
+            return query;
+        }
+        return null;
     }
 
     private void asyncQueryResults(
@@ -225,6 +245,10 @@ public class StatementResource
         query.getResetSessionProperties()
                 .forEach(name -> response.header(PRESTO_CLEAR_SESSION, name));
 
+        // add set roles
+        query.getSetRoles().entrySet()
+                .forEach(entry -> response.header(PRESTO_SET_ROLE, entry.getKey() + '=' + urlEncode(entry.getValue().toString())));
+
         // add added prepare statements
         for (Entry<String, String> entry : query.getAddedPreparedStatements().entrySet()) {
             String encodedKey = urlEncode(entry.getKey());
@@ -250,12 +274,14 @@ public class StatementResource
     }
 
     @DELETE
-    @Path("{queryId}/{token}")
+    @Path("{queryId}/{slug}/{token}")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response cancelQuery(@PathParam("queryId") QueryId queryId,
+    public Response cancelQuery(
+            @PathParam("queryId") QueryId queryId,
+            @PathParam("slug") String slug,
             @PathParam("token") long token)
     {
-        Query query = queries.get(queryId);
+        Query query = getQuery(queryId, slug);
         if (query == null) {
             return Response.status(Status.NOT_FOUND).build();
         }
@@ -271,5 +297,12 @@ public class StatementResource
         catch (UnsupportedEncodingException e) {
             throw new AssertionError(e);
         }
+    }
+
+    @Managed
+    @Nested
+    public CounterStat getCreateQueryRequests()
+    {
+        return createQueryRequests;
     }
 }

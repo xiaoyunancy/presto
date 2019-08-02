@@ -17,7 +17,7 @@ import com.facebook.presto.operator.FilterAndProjectOperator;
 import com.facebook.presto.operator.OperatorStats;
 import com.facebook.presto.operator.TableWriterOperator;
 import com.facebook.presto.spi.eventlistener.StageGcStatistics;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.json.JsonCodec;
@@ -48,6 +48,7 @@ public class TestQueryStats
                     15L,
                     new Duration(16, NANOSECONDS),
                     new Duration(17, NANOSECONDS),
+                    succinctBytes(18L),
                     succinctBytes(19L),
                     110L,
                     111.0,
@@ -67,6 +68,7 @@ public class TestQueryStats
                     succinctBytes(127L),
                     succinctBytes(128L),
                     succinctBytes(129L),
+                    succinctBytes(130L),
                     Optional.empty(),
                     null),
             new OperatorStats(
@@ -79,6 +81,7 @@ public class TestQueryStats
                     25L,
                     new Duration(26, NANOSECONDS),
                     new Duration(27, NANOSECONDS),
+                    succinctBytes(28L),
                     succinctBytes(29L),
                     210L,
                     211.0,
@@ -98,6 +101,7 @@ public class TestQueryStats
                     succinctBytes(227L),
                     succinctBytes(228L),
                     succinctBytes(229L),
+                    succinctBytes(230L),
                     Optional.empty(),
                     null),
             new OperatorStats(
@@ -110,6 +114,7 @@ public class TestQueryStats
                     35L,
                     new Duration(36, NANOSECONDS),
                     new Duration(37, NANOSECONDS),
+                    succinctBytes(38L),
                     succinctBytes(39L),
                     310L,
                     311.0,
@@ -129,6 +134,7 @@ public class TestQueryStats
                     succinctBytes(327L),
                     succinctBytes(328L),
                     succinctBytes(329L),
+                    succinctBytes(330L),
                     Optional.empty(),
                     null));
 
@@ -140,8 +146,8 @@ public class TestQueryStats
             new Duration(6, NANOSECONDS),
             new Duration(5, NANOSECONDS),
             new Duration(31, NANOSECONDS),
+            new Duration(41, NANOSECONDS),
             new Duration(7, NANOSECONDS),
-            new Duration(8, NANOSECONDS),
 
             new Duration(100, NANOSECONDS),
             new Duration(200, NANOSECONDS),
@@ -162,6 +168,7 @@ public class TestQueryStats
             new DataSize(20, BYTE),
             new DataSize(21, BYTE),
             new DataSize(22, BYTE),
+            new DataSize(23, BYTE),
 
             true,
             new Duration(20, NANOSECONDS),
@@ -179,7 +186,11 @@ public class TestQueryStats
             new DataSize(28, BYTE),
             29,
 
-            new DataSize(30, BYTE),
+            30,
+            new DataSize(31, BYTE),
+            new DataSize(32, BYTE),
+
+            new DataSize(33, BYTE),
 
             ImmutableList.of(new StageGcStatistics(
                     101,
@@ -212,9 +223,8 @@ public class TestQueryStats
 
         assertEquals(actual.getElapsedTime(), new Duration(6, NANOSECONDS));
         assertEquals(actual.getQueuedTime(), new Duration(5, NANOSECONDS));
-        assertEquals(actual.getExecutionTime(), new Duration(1, NANOSECONDS));
+        assertEquals(actual.getExecutionTime(), new Duration(41, NANOSECONDS));
         assertEquals(actual.getAnalysisTime(), new Duration(7, NANOSECONDS));
-        assertEquals(actual.getDistributedPlanningTime(), new Duration(8, NANOSECONDS));
 
         assertEquals(actual.getTotalPlanningTime(), new Duration(100, NANOSECONDS));
         assertEquals(actual.getFinishingTime(), new Duration(200, NANOSECONDS));
@@ -234,6 +244,9 @@ public class TestQueryStats
         assertEquals(actual.getTotalMemoryReservation(), new DataSize(19, BYTE));
         assertEquals(actual.getPeakUserMemoryReservation(), new DataSize(20, BYTE));
         assertEquals(actual.getPeakTotalMemoryReservation(), new DataSize(21, BYTE));
+        assertEquals(actual.getPeakTaskUserMemory(), new DataSize(22, BYTE));
+        assertEquals(actual.getPeakTaskTotalMemory(), new DataSize(23, BYTE));
+        assertEquals(actual.getSpilledDataSize(), new DataSize(690, BYTE));
 
         assertEquals(actual.getTotalScheduledTime(), new Duration(20, NANOSECONDS));
         assertEquals(actual.getTotalCpuTime(), new Duration(21, NANOSECONDS));
@@ -248,7 +261,12 @@ public class TestQueryStats
         assertEquals(actual.getOutputDataSize(), new DataSize(28, BYTE));
         assertEquals(actual.getOutputPositions(), 29);
 
-        assertEquals(actual.getPhysicalWrittenDataSize(), new DataSize(30, BYTE));
+        assertEquals(actual.getWrittenOutputPositions(), 30);
+
+        assertEquals(actual.getWrittenOutputLogicalDataSize(), new DataSize(31, BYTE));
+        assertEquals(actual.getWrittenOutputPhysicalDataSize(), new DataSize(32, BYTE));
+
+        assertEquals(actual.getWrittenIntermediatePhysicalDataSize(), new DataSize(33, BYTE));
 
         assertEquals(actual.getStageGcStatistics().size(), 1);
         StageGcStatistics gcStatistics = actual.getStageGcStatistics().get(0);
@@ -259,8 +277,5 @@ public class TestQueryStats
         assertEquals(gcStatistics.getMaxFullGcSec(), 105);
         assertEquals(gcStatistics.getTotalFullGcSec(), 106);
         assertEquals(gcStatistics.getAverageFullGcSec(), 107);
-
-        assertEquals(420, actual.getWrittenPositions());
-        assertEquals(58, actual.getLogicalWrittenDataSize().toBytes());
     }
 }

@@ -20,8 +20,7 @@ import com.esri.core.geometry.ogc.OGCPoint;
 import com.facebook.presto.block.BlockAssertions;
 import com.facebook.presto.geospatial.KdbTreeUtils;
 import com.facebook.presto.geospatial.Rectangle;
-import com.facebook.presto.metadata.FunctionKind;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.operator.aggregation.Accumulator;
 import com.facebook.presto.operator.aggregation.AccumulatorFactory;
 import com.facebook.presto.operator.aggregation.GroupedAccumulator;
@@ -30,7 +29,6 @@ import com.facebook.presto.operator.scalar.AbstractTestFunctions;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.type.TypeSignature;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
 import org.testng.annotations.BeforeClass;
@@ -46,9 +44,8 @@ import static com.facebook.presto.operator.aggregation.AggregationTestUtils.crea
 import static com.facebook.presto.operator.aggregation.AggregationTestUtils.getFinalBlock;
 import static com.facebook.presto.operator.aggregation.AggregationTestUtils.getGroupValue;
 import static com.facebook.presto.plugin.geospatial.GeometryType.GEOMETRY;
-import static com.facebook.presto.plugin.geospatial.GeometryType.GEOMETRY_TYPE_NAME;
-import static com.facebook.presto.spi.type.StandardTypes.INTEGER;
-import static com.facebook.presto.spi.type.StandardTypes.VARCHAR;
+import static com.facebook.presto.spi.type.IntegerType.INTEGER;
+import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.google.common.math.DoubleMath.roundToInt;
 import static java.math.RoundingMode.CEILING;
 import static org.testng.Assert.assertEquals;
@@ -98,15 +95,9 @@ public class TestSpatialPartitioningInternalAggregation
 
     private InternalAggregationFunction getFunction()
     {
-        return functionAssertions
-                .getMetadata()
-                .getFunctionRegistry()
-                .getAggregateFunctionImplementation(
-                        new Signature("spatial_partitioning",
-                                FunctionKind.AGGREGATE,
-                                TypeSignature.parseTypeSignature(VARCHAR),
-                                TypeSignature.parseTypeSignature(GEOMETRY_TYPE_NAME),
-                                TypeSignature.parseTypeSignature(INTEGER)));
+        FunctionManager functionManager = functionAssertions.getMetadata().getFunctionManager();
+        return functionManager.getAggregateFunctionImplementation(
+                functionManager.lookupFunction("spatial_partitioning", fromTypes(GEOMETRY, INTEGER)));
     }
 
     private List<OGCGeometry> makeGeometries()

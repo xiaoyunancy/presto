@@ -30,7 +30,6 @@ import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
 import com.facebook.presto.spi.type.ArrayType;
-import io.airlift.node.NodeInfo;
 import io.airlift.units.Duration;
 import org.joda.time.DateTime;
 
@@ -55,7 +54,6 @@ public class QuerySystemTable
     public static final SchemaTableName QUERY_TABLE_NAME = new SchemaTableName("runtime", "queries");
 
     public static final ConnectorTableMetadata QUERY_TABLE = tableMetadataBuilder(QUERY_TABLE_NAME)
-            .column("node_id", createUnboundedVarcharType())
             .column("query_id", createUnboundedVarcharType())
             .column("state", createUnboundedVarcharType())
             .column("user", createUnboundedVarcharType())
@@ -65,7 +63,6 @@ public class QuerySystemTable
 
             .column("queued_time_ms", BIGINT)
             .column("analysis_time_ms", BIGINT)
-            .column("distributed_planning_time_ms", BIGINT)
 
             .column("created", TIMESTAMP)
             .column("started", TIMESTAMP)
@@ -74,13 +71,11 @@ public class QuerySystemTable
             .build();
 
     private final QueryManager queryManager;
-    private final String nodeId;
 
     @Inject
-    public QuerySystemTable(QueryManager queryManager, NodeInfo nodeInfo)
+    public QuerySystemTable(QueryManager queryManager)
     {
         this.queryManager = queryManager;
-        this.nodeId = nodeInfo.getNodeId();
     }
 
     @Override
@@ -114,7 +109,6 @@ public class QuerySystemTable
         for (QueryInfo queryInfo : queryInfos) {
             QueryStats queryStats = queryInfo.getQueryStats();
             table.addRow(
-                    nodeId,
                     queryInfo.getQueryId().toString(),
                     queryInfo.getState().toString(),
                     queryInfo.getSession().getUser(),
@@ -124,7 +118,6 @@ public class QuerySystemTable
 
                     toMillis(queryStats.getQueuedTime()),
                     toMillis(queryStats.getAnalysisTime()),
-                    toMillis(queryStats.getDistributedPlanningTime()),
 
                     toTimeStamp(queryStats.getCreateTime()),
                     toTimeStamp(queryStats.getExecutionStartTime()),

@@ -18,6 +18,7 @@ import com.facebook.presto.hive.PartitionUpdate.UpdateMode;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.classloader.ThreadContextClassLoader;
 import com.facebook.presto.spi.procedure.Procedure;
 import com.facebook.presto.spi.procedure.Procedure.Argument;
 import com.google.common.collect.ImmutableList;
@@ -75,14 +76,21 @@ public class CreateEmptyPartitionProcedure
                 "system",
                 "create_empty_partition",
                 ImmutableList.of(
-                        new Argument("schema", VARCHAR),
-                        new Argument("table", VARCHAR),
-                        new Argument("partitionColumnNames", "array(varchar)"),
-                        new Argument("partitionValues", "array(varchar)")),
+                        new Argument("schema_name", VARCHAR),
+                        new Argument("table_name", VARCHAR),
+                        new Argument("partition_columns", "array(varchar)"),
+                        new Argument("partition_values", "array(varchar)")),
                 CREATE_EMPTY_PARTITION.bindTo(this));
     }
 
     public void createEmptyPartition(ConnectorSession session, String schema, String table, List<Object> partitionColumnNames, List<Object> partitionValues)
+    {
+        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(getClass().getClassLoader())) {
+            doCreateEmptyPartition(session, schema, table, partitionColumnNames, partitionValues);
+        }
+    }
+
+    private void doCreateEmptyPartition(ConnectorSession session, String schema, String table, List<Object> partitionColumnNames, List<Object> partitionValues)
     {
         TransactionalMetadata hiveMetadata = hiveMetadataFactory.get();
 

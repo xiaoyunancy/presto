@@ -18,6 +18,7 @@ import com.facebook.presto.cost.CostCalculator;
 import com.facebook.presto.cost.CostCalculatorUsingExchanges;
 import com.facebook.presto.cost.CostCalculatorWithEstimatedExchanges;
 import com.facebook.presto.cost.CostComparator;
+import com.facebook.presto.cost.TaskCountEstimator;
 import com.facebook.presto.execution.QueryManagerConfig;
 import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
@@ -26,8 +27,11 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.analyzer.QueryExplainer;
 import com.facebook.presto.sql.parser.SqlParser;
+import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.PlanFragmenter;
 import com.facebook.presto.sql.planner.PlanOptimizers;
+import com.facebook.presto.sql.planner.assertions.PlanAssert;
+import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
 import com.facebook.presto.sql.tree.ExplainType;
 import com.facebook.presto.testing.MaterializedResult;
@@ -46,10 +50,12 @@ import org.weakref.jmx.testing.TestingMBeanServer;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.function.Consumer;
 
 import static com.facebook.presto.sql.ParsingUtil.createParsingOptions;
 import static com.facebook.presto.sql.SqlFormatter.formatSql;
 import static com.facebook.presto.transaction.TransactionBuilder.transaction;
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.nullToEmpty;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -137,6 +143,18 @@ public abstract class AbstractTestQueryFramework
         QueryAssertions.assertQuery(queryRunner, session, actual, h2QueryRunner, expected, false, false);
     }
 
+    protected void assertQuery(Session session, @Language("SQL") String sql, Consumer<Plan> planAssertion)
+    {
+        checkArgument(queryRunner instanceof DistributedQueryRunner, "pattern assertion is only supported for DistributedQueryRunner");
+        QueryAssertions.assertQuery(queryRunner, session, sql, h2QueryRunner, sql, false, false, planAssertion);
+    }
+
+    protected void assertQuery(Session session, @Language("SQL") String actual, @Language("SQL") String expected, Consumer<Plan> planAssertion)
+    {
+        checkArgument(queryRunner instanceof DistributedQueryRunner, "pattern assertion is only supported for DistributedQueryRunner");
+        QueryAssertions.assertQuery(queryRunner, session, actual, h2QueryRunner, expected, false, false, planAssertion);
+    }
+
     public void assertQueryOrdered(@Language("SQL") String sql)
     {
         assertQueryOrdered(getSession(), sql);
@@ -174,7 +192,7 @@ public abstract class AbstractTestQueryFramework
 
     protected void assertUpdate(Session session, @Language("SQL") String sql)
     {
-        QueryAssertions.assertUpdate(queryRunner, session, sql, OptionalLong.empty());
+        QueryAssertions.assertUpdate(queryRunner, session, sql, OptionalLong.empty(), Optional.empty());
     }
 
     protected void assertUpdate(@Language("SQL") String sql, long count)
@@ -184,7 +202,12 @@ public abstract class AbstractTestQueryFramework
 
     protected void assertUpdate(Session session, @Language("SQL") String sql, long count)
     {
-        QueryAssertions.assertUpdate(queryRunner, session, sql, OptionalLong.of(count));
+        QueryAssertions.assertUpdate(queryRunner, session, sql, OptionalLong.of(count), Optional.empty());
+    }
+
+    protected void assertUpdate(Session session, @Language("SQL") String sql, long count, Consumer<Plan> planAssertion)
+    {
+        QueryAssertions.assertUpdate(queryRunner, session, sql, OptionalLong.of(count), Optional.of(planAssertion));
     }
 
     protected void assertQuerySucceeds(Session session, @Language("SQL") String sql)
@@ -301,7 +324,7 @@ public abstract class AbstractTestQueryFramework
         return transaction(queryRunner.getTransactionManager(), queryRunner.getAccessControl())
                 .singleStatement()
                 .execute(queryRunner.getDefaultSession(), session -> {
-                    return explainer.getPlan(session, sqlParser.createStatement(query, createParsingOptions(session)), planType, emptyList(), WarningCollector.NOOP);
+                    return explainer.getPlan(session, sqlParser.createStatement(query, createParsingOptions(session)), planType, emptyList(), false, WarningCollector.NOOP);
                 });
     }
 
@@ -315,12 +338,36 @@ public abstract class AbstractTestQueryFramework
                 });
     }
 
+    protected void assertPlan(@Language("SQL") String query, PlanMatchPattern pattern)
+    {
+        assertPlan(queryRunner.getDefaultSession(), query, pattern);
+    }
+
+    protected void assertPlan(Session session, @Language("SQL") String query, PlanMatchPattern pattern)
+    {
+        assertPlan(session, query, pattern, plan -> {});
+    }
+
+    protected void assertPlan(Session session, @Language("SQL") String query, PlanMatchPattern pattern, Consumer<Plan> planValidator)
+    {
+        QueryExplainer explainer = getQueryExplainer();
+        transaction(queryRunner.getTransactionManager(), queryRunner.getAccessControl())
+                .singleStatement()
+                .execute(session, transactionSession -> {
+                    Plan actualPlan = explainer.getLogicalPlan(transactionSession, sqlParser.createStatement(query, createParsingOptions(transactionSession)), emptyList(), WarningCollector.NOOP);
+                    PlanAssert.assertPlan(transactionSession, queryRunner.getMetadata(), queryRunner.getStatsCalculator(), actualPlan, pattern);
+                    planValidator.accept(actualPlan);
+                    return null;
+                });
+    }
+
     private QueryExplainer getQueryExplainer()
     {
         Metadata metadata = queryRunner.getMetadata();
         FeaturesConfig featuresConfig = new FeaturesConfig().setOptimizeHashGeneration(true);
         boolean forceSingleNode = queryRunner.getNodeCount() == 1;
-        CostCalculator costCalculator = new CostCalculatorUsingExchanges(queryRunner::getNodeCount);
+        TaskCountEstimator taskCountEstimator = new TaskCountEstimator(queryRunner::getNodeCount);
+        CostCalculator costCalculator = new CostCalculatorUsingExchanges(taskCountEstimator);
         List<PlanOptimizer> optimizers = new PlanOptimizers(
                 metadata,
                 sqlParser,
@@ -328,16 +375,17 @@ public abstract class AbstractTestQueryFramework
                 forceSingleNode,
                 new MBeanExporter(new TestingMBeanServer()),
                 queryRunner.getSplitManager(),
+                queryRunner.getPlanOptimizerManager(),
                 queryRunner.getPageSourceManager(),
                 queryRunner.getStatsCalculator(),
                 costCalculator,
-                new CostCalculatorWithEstimatedExchanges(costCalculator, queryRunner::getNodeCount),
-                new CostComparator(featuresConfig)).get();
+                new CostCalculatorWithEstimatedExchanges(costCalculator, taskCountEstimator),
+                new CostComparator(featuresConfig),
+                taskCountEstimator).get();
         return new QueryExplainer(
                 optimizers,
-                new PlanFragmenter(new QueryManagerConfig()),
+                new PlanFragmenter(metadata, queryRunner.getNodePartitioningManager(), new QueryManagerConfig(), sqlParser),
                 metadata,
-                queryRunner.getNodePartitioningManager(),
                 queryRunner.getAccessControl(),
                 sqlParser,
                 queryRunner.getStatsCalculator(),

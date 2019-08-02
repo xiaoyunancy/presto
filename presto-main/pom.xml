@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.213-SNAPSHOT</version>
+        <version>0.225-SNAPSHOT</version>
     </parent>
 
     <artifactId>presto-main</artifactId>
@@ -49,6 +49,11 @@
         <dependency>
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-array</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.facebook.presto</groupId>
+            <artifactId>presto-bytecode</artifactId>
         </dependency>
 
         <dependency>
@@ -178,12 +183,12 @@
 
         <dependency>
             <groupId>io.airlift</groupId>
-            <artifactId>bytecode</artifactId>
+            <artifactId>joni</artifactId>
         </dependency>
 
         <dependency>
             <groupId>io.airlift</groupId>
-            <artifactId>joni</artifactId>
+            <artifactId>joda-to-java-time-bridge</artifactId>
         </dependency>
 
         <dependency>
@@ -229,6 +234,16 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-afterburner</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-smile</artifactId>
         </dependency>
 
         <dependency>
@@ -354,12 +369,6 @@
         </dependency>
 
         <dependency>
-            <groupId>com.facebook.presto</groupId>
-            <artifactId>presto-benchto-queries</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
             <groupId>org.openjdk.jmh</groupId>
             <artifactId>jmh-core</artifactId>
             <scope>test</scope>
@@ -382,6 +391,10 @@
             <artifactId>jaxrs-testing</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>com.facebook.presto</groupId>
+            <artifactId>presto-plugin-toolkit</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
@@ -403,6 +416,9 @@
                     <excludes>
                         <exclude>**/TestLocalExecutionPlanner.java</exclude>
                     </excludes>
+                    <systemPropertyVariables>
+                        <org.joda.time.DateTimeZone.Provider>io.airlift.jodabridge.JdkBasedZoneInfoProvider</org.joda.time.DateTimeZone.Provider>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
         </plugins>

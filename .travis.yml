@@ -17,8 +17,11 @@ env:
     - TEST_SPECIFIC_MODULES=presto-accumulo
     - TEST_SPECIFIC_MODULES=presto-cassandra
     - TEST_SPECIFIC_MODULES=presto-hive
+    - TEST_SPECIFIC_MODULES=presto-hive TEST_FLAGS="-P test-hive-materialized"
+    - TEST_SPECIFIC_MODULES=presto-hive TEST_FLAGS="-P test-hive-recoverable-grouped-execution"
     - TEST_SPECIFIC_MODULES=presto-main
-    - TEST_OTHER_MODULES=!presto-tests,!presto-raptor,!presto-accumulo,!presto-cassandra,!presto-hive,!presto-kudu,!presto-docs,!presto-server,!presto-server-rpm,!presto-main
+    - TEST_SPECIFIC_MODULES=presto-mongodb
+    - TEST_OTHER_MODULES=!presto-tests,!presto-raptor,!presto-accumulo,!presto-cassandra,!presto-hive,!presto-kudu,!presto-docs,!presto-server,!presto-server-rpm,!presto-main,!presto-mongodb
     - PRODUCT_TESTS_BASIC_ENVIRONMENT=true
     - PRODUCT_TESTS_SPECIFIC_ENVIRONMENT=true
     - PRODUCT_TESTS_SPECIFIC_ENVIRONMENT_2=true
@@ -35,6 +38,9 @@ cache:
 
 services:
   - docker
+
+git:
+  quiet: true
 
 install:
   - ./mvnw -v
@@ -82,7 +88,7 @@ script:
     fi
   - |
     if [[ -v WEBUI_CHECKS ]]; then
-      presto-main/bin/validate_webui_generated_files.sh
+      presto-main/bin/check_webui.sh
     fi
   - |
     if [[ -v TEST_SPECIFIC_MODULES ]]; then
@@ -185,7 +191,7 @@ script:
     if [[ -v HIVE_TESTS && -v HIVE_TESTS_AWS_ACCESS_KEY_ID ]]; then
       env AWS_ACCESS_KEY_ID=$HIVE_TESTS_AWS_ACCESS_KEY_ID \
         AWS_SECRET_ACCESS_KEY=$HIVE_TESTS_AWS_SECRET_ACCESS_KEY \
-        ./mvnw -pl presto-hive test -B -P test-hive-glue
+        ./mvnw test $MAVEN_SKIP_CHECKS_AND_DOCS -B -pl presto-hive -P test-hive-glue
     fi
   - |
     if [[ -v KUDU_TESTS ]]; then

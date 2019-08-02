@@ -15,24 +15,30 @@ package com.facebook.presto.plugin.jdbc;
 
 import com.facebook.presto.spi.connector.Connector;
 import com.facebook.presto.spi.connector.ConnectorAccessControl;
+import com.facebook.presto.spi.connector.ConnectorCapabilities;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.facebook.presto.spi.connector.ConnectorPageSinkProvider;
 import com.facebook.presto.spi.connector.ConnectorRecordSetProvider;
 import com.facebook.presto.spi.connector.ConnectorSplitManager;
 import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
+import com.facebook.presto.spi.procedure.Procedure;
 import com.facebook.presto.spi.transaction.IsolationLevel;
+import com.google.common.collect.ImmutableSet;
 import io.airlift.bootstrap.LifeCycleManager;
 import io.airlift.log.Logger;
 
 import javax.inject.Inject;
 
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+import static com.facebook.presto.spi.connector.ConnectorCapabilities.NOT_NULL_COLUMN_CONSTRAINT;
 import static com.facebook.presto.spi.transaction.IsolationLevel.READ_COMMITTED;
 import static com.facebook.presto.spi.transaction.IsolationLevel.checkConnectorSupports;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.Sets.immutableEnumSet;
 import static java.util.Objects.requireNonNull;
 
 public class JdbcConnector
@@ -46,6 +52,7 @@ public class JdbcConnector
     private final JdbcRecordSetProvider jdbcRecordSetProvider;
     private final JdbcPageSinkProvider jdbcPageSinkProvider;
     private final Optional<ConnectorAccessControl> accessControl;
+    private final Set<Procedure> procedures;
 
     private final ConcurrentMap<ConnectorTransactionHandle, JdbcMetadata> transactions = new ConcurrentHashMap<>();
 
@@ -56,7 +63,8 @@ public class JdbcConnector
             JdbcSplitManager jdbcSplitManager,
             JdbcRecordSetProvider jdbcRecordSetProvider,
             JdbcPageSinkProvider jdbcPageSinkProvider,
-            Optional<ConnectorAccessControl> accessControl)
+            Optional<ConnectorAccessControl> accessControl,
+            Set<Procedure> procedures)
     {
         this.lifeCycleManager = requireNonNull(lifeCycleManager, "lifeCycleManager is null");
         this.jdbcMetadataFactory = requireNonNull(jdbcMetadataFactory, "jdbcMetadataFactory is null");
@@ -64,6 +72,7 @@ public class JdbcConnector
         this.jdbcRecordSetProvider = requireNonNull(jdbcRecordSetProvider, "jdbcRecordSetProvider is null");
         this.jdbcPageSinkProvider = requireNonNull(jdbcPageSinkProvider, "jdbcPageSinkProvider is null");
         this.accessControl = requireNonNull(accessControl, "accessControl is null");
+        this.procedures = ImmutableSet.copyOf(requireNonNull(procedures, "procedures is null"));
     }
 
     @Override
@@ -128,6 +137,12 @@ public class JdbcConnector
     }
 
     @Override
+    public Set<Procedure> getProcedures()
+    {
+        return procedures;
+    }
+
+    @Override
     public final void shutdown()
     {
         try {
@@ -136,5 +151,11 @@ public class JdbcConnector
         catch (Exception e) {
             log.error(e, "Error shutting down connector");
         }
+    }
+
+    @Override
+    public Set<ConnectorCapabilities> getCapabilities()
+    {
+        return immutableEnumSet(NOT_NULL_COLUMN_CONSTRAINT);
     }
 }

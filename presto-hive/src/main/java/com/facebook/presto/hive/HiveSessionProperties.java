@@ -40,6 +40,7 @@ import static java.util.Locale.ENGLISH;
 
 public final class HiveSessionProperties
 {
+    private static final String IGNORE_TABLE_BUCKETING = "ignore_table_bucketing";
     private static final String BUCKET_EXECUTION_ENABLED = "bucket_execution_enabled";
     private static final String FORCE_LOCAL_SCHEDULING = "force_local_scheduling";
     private static final String INSERT_EXISTING_PARTITIONS_BEHAVIOR = "insert_existing_partitions_behavior";
@@ -60,8 +61,10 @@ public final class HiveSessionProperties
     private static final String ORC_OPTIMIZED_WRITER_MAX_STRIPE_ROWS = "orc_optimized_writer_max_stripe_rows";
     private static final String ORC_OPTIMIZED_WRITER_MAX_DICTIONARY_MEMORY = "orc_optimized_writer_max_dictionary_memory";
     private static final String HIVE_STORAGE_FORMAT = "hive_storage_format";
+    private static final String COMPRESSION_CODEC = "compression_codec";
     private static final String RESPECT_TABLE_FORMAT = "respect_table_format";
     private static final String PARQUET_USE_COLUMN_NAME = "parquet_use_column_names";
+    private static final String PARQUET_FAIL_WITH_CORRUPTED_STATISTICS = "parquet_fail_with_corrupted_statistics";
     private static final String PARQUET_WRITER_BLOCK_SIZE = "parquet_writer_block_size";
     private static final String PARQUET_WRITER_PAGE_SIZE = "parquet_writer_page_size";
     private static final String MAX_SPLIT_SIZE = "max_split_size";
@@ -73,6 +76,16 @@ public final class HiveSessionProperties
     private static final String PARTITION_STATISTICS_SAMPLE_SIZE = "partition_statistics_sample_size";
     private static final String IGNORE_CORRUPTED_STATISTICS = "ignore_corrupted_statistics";
     private static final String COLLECT_COLUMN_STATISTICS_ON_WRITE = "collect_column_statistics_on_write";
+    private static final String OPTIMIZE_MISMATCHED_BUCKET_COUNT = "optimize_mismatched_bucket_count";
+    private static final String S3_SELECT_PUSHDOWN_ENABLED = "s3_select_pushdown_enabled";
+    private static final String TEMPORARY_STAGING_DIRECTORY_ENABLED = "temporary_staging_directory_enabled";
+    private static final String TEMPORARY_STAGING_DIRECTORY_PATH = "temporary_staging_directory_path";
+    private static final String TEMPORARY_TABLE_SCHEMA = "temporary_table_schema";
+    private static final String TEMPORARY_TABLE_STORAGE_FORMAT = "temporary_table_storage_format";
+    private static final String TEMPORARY_TABLE_COMPRESSION_CODEC = "temporary_table_compression_codec";
+    public static final String PUSHDOWN_FILTER_ENABLED = "pushdown_filter_enabled";
+    public static final String VIRTUAL_BUCKET_COUNT = "virtual_bucket_count";
+    public static final String MAX_BUCKETS_FOR_GROUPED_EXECUTION = "max_buckets_for_grouped_execution";
 
     private final List<PropertyMetadata<?>> sessionProperties;
 
@@ -98,6 +111,11 @@ public final class HiveSessionProperties
     public HiveSessionProperties(HiveClientConfig hiveClientConfig, OrcFileWriterConfig orcFileWriterConfig, ParquetFileWriterConfig parquetFileWriterConfig)
     {
         sessionProperties = ImmutableList.of(
+                booleanProperty(
+                        IGNORE_TABLE_BUCKETING,
+                        "Ignore table bucketing to enable reading from unbucketed partitions",
+                        hiveClientConfig.isIgnoreTableBucketing(),
+                        false),
                 booleanProperty(
                         BUCKET_EXECUTION_ENABLED,
                         "Enable bucket-aware execution: only use a single worker per bucket",
@@ -214,6 +232,15 @@ public final class HiveSessionProperties
                         "Default storage format for new tables or partitions",
                         hiveClientConfig.getHiveStorageFormat().toString(),
                         false),
+                new PropertyMetadata<>(
+                        COMPRESSION_CODEC,
+                        "The compression codec to use when writing files",
+                        VARCHAR,
+                        HiveCompressionCodec.class,
+                        hiveClientConfig.getCompressionCodec(),
+                        false,
+                        value -> HiveCompressionCodec.valueOf(((String) value).toUpperCase()),
+                        HiveCompressionCodec::name),
                 booleanProperty(
                         RESPECT_TABLE_FORMAT,
                         "Write new partitions using table format rather than default storage format",
@@ -223,6 +250,11 @@ public final class HiveSessionProperties
                         PARQUET_USE_COLUMN_NAME,
                         "Experimental: Parquet: Access Parquet columns using names from the file",
                         hiveClientConfig.isUseParquetColumnNames(),
+                        false),
+                booleanProperty(
+                        PARQUET_FAIL_WITH_CORRUPTED_STATISTICS,
+                        "Parquet: Fail when scanning Parquet files with corrupted statistics",
+                        hiveClientConfig.isFailOnCorruptedParquetStatistics(),
                         false),
                 dataSizeSessionProperty(
                         PARQUET_WRITER_BLOCK_SIZE,
@@ -278,6 +310,64 @@ public final class HiveSessionProperties
                         COLLECT_COLUMN_STATISTICS_ON_WRITE,
                         "Experimental: Enables automatic column level statistics collection on write",
                         hiveClientConfig.isCollectColumnStatisticsOnWrite(),
+                        false),
+                booleanProperty(
+                        OPTIMIZE_MISMATCHED_BUCKET_COUNT,
+                        "Experimental: Enable optimization to avoid shuffle when bucket count is compatible but not the same",
+                        hiveClientConfig.isOptimizeMismatchedBucketCount(),
+                        false),
+                booleanProperty(
+                        S3_SELECT_PUSHDOWN_ENABLED,
+                        "S3 Select pushdown enabled",
+                        hiveClientConfig.isS3SelectPushdownEnabled(),
+                        false),
+                booleanProperty(
+                        TEMPORARY_STAGING_DIRECTORY_ENABLED,
+                        "Should use temporary staging directory for write operations",
+                        hiveClientConfig.isTemporaryStagingDirectoryEnabled(),
+                        false),
+                stringProperty(
+                        TEMPORARY_STAGING_DIRECTORY_PATH,
+                        "Temporary staging directory location",
+                        hiveClientConfig.getTemporaryStagingDirectoryPath(),
+                        false),
+                stringProperty(
+                        TEMPORARY_TABLE_SCHEMA,
+                        "Schema where to create temporary tables",
+                        hiveClientConfig.getTemporaryTableSchema(),
+                        false),
+                new PropertyMetadata<>(
+                        TEMPORARY_TABLE_STORAGE_FORMAT,
+                        "Storage format used to store data in temporary tables",
+                        VARCHAR,
+                        HiveStorageFormat.class,
+                        hiveClientConfig.getTemporaryTableStorageFormat(),
+                        false,
+                        value -> HiveStorageFormat.valueOf(((String) value).toUpperCase()),
+                        HiveStorageFormat::name),
+                new PropertyMetadata<>(
+                        TEMPORARY_TABLE_COMPRESSION_CODEC,
+                        "Compression codec used to store data in temporary tables",
+                        VARCHAR,
+                        HiveCompressionCodec.class,
+                        hiveClientConfig.getTemporaryTableCompressionCodec(),
+                        false,
+                        value -> HiveCompressionCodec.valueOf(((String) value).toUpperCase()),
+                        HiveCompressionCodec::name),
+                booleanProperty(
+                        PUSHDOWN_FILTER_ENABLED,
+                        "Experimental: enable complex filter pushdown",
+                        hiveClientConfig.isPushdownFilterEnabled(),
+                        false),
+                integerProperty(
+                        VIRTUAL_BUCKET_COUNT,
+                        "Number of virtual bucket assigned for unbucketed tables",
+                        0,
+                        false),
+                integerProperty(
+                        MAX_BUCKETS_FOR_GROUPED_EXECUTION,
+                        "maximum total buckets to allow using grouped execution",
+                        hiveClientConfig.getMaxBucketsForGroupedExecution(),
                         false));
     }
 
@@ -289,6 +379,16 @@ public final class HiveSessionProperties
     public static boolean isBucketExecutionEnabled(ConnectorSession session)
     {
         return session.getProperty(BUCKET_EXECUTION_ENABLED, Boolean.class);
+    }
+
+    public static boolean shouldIgnoreTableBucketing(ConnectorSession session)
+    {
+        return session.getProperty(IGNORE_TABLE_BUCKETING, Boolean.class);
+    }
+
+    public static int getMaxBucketsForGroupedExecution(ConnectorSession session)
+    {
+        return session.getProperty(MAX_BUCKETS_FOR_GROUPED_EXECUTION, Integer.class);
     }
 
     public static boolean isForceLocalScheduling(ConnectorSession session)
@@ -393,6 +493,11 @@ public final class HiveSessionProperties
         return HiveStorageFormat.valueOf(session.getProperty(HIVE_STORAGE_FORMAT, String.class).toUpperCase(ENGLISH));
     }
 
+    public static HiveCompressionCodec getCompressionCodec(ConnectorSession session)
+    {
+        return session.getProperty(COMPRESSION_CODEC, HiveCompressionCodec.class);
+    }
+
     public static boolean isRespectTableFormat(ConnectorSession session)
     {
         return session.getProperty(RESPECT_TABLE_FORMAT, Boolean.class);
@@ -401,6 +506,11 @@ public final class HiveSessionProperties
     public static boolean isUseParquetColumnNames(ConnectorSession session)
     {
         return session.getProperty(PARQUET_USE_COLUMN_NAME, Boolean.class);
+    }
+
+    public static boolean isFailOnCorruptedParquetStatistics(ConnectorSession session)
+    {
+        return session.getProperty(PARQUET_FAIL_WITH_CORRUPTED_STATISTICS, Boolean.class);
     }
 
     public static DataSize getParquetWriterBlockSize(ConnectorSession session)
@@ -438,6 +548,11 @@ public final class HiveSessionProperties
         return session.getProperty(SORTED_WRITING_ENABLED, Boolean.class);
     }
 
+    public static boolean isS3SelectPushdownEnabled(ConnectorSession session)
+    {
+        return session.getProperty(S3_SELECT_PUSHDOWN_ENABLED, Boolean.class);
+    }
+
     public static boolean isStatisticsEnabled(ConnectorSession session)
     {
         return session.getProperty(STATISTICS_ENABLED, Boolean.class);
@@ -460,6 +575,51 @@ public final class HiveSessionProperties
     public static boolean isCollectColumnStatisticsOnWrite(ConnectorSession session)
     {
         return session.getProperty(COLLECT_COLUMN_STATISTICS_ON_WRITE, Boolean.class);
+    }
+
+    @Deprecated
+    public static boolean isOptimizedMismatchedBucketCount(ConnectorSession session)
+    {
+        return session.getProperty(OPTIMIZE_MISMATCHED_BUCKET_COUNT, Boolean.class);
+    }
+
+    public static boolean isTemporaryStagingDirectoryEnabled(ConnectorSession session)
+    {
+        return session.getProperty(TEMPORARY_STAGING_DIRECTORY_ENABLED, Boolean.class);
+    }
+
+    public static String getTemporaryStagingDirectoryPath(ConnectorSession session)
+    {
+        return session.getProperty(TEMPORARY_STAGING_DIRECTORY_PATH, String.class);
+    }
+
+    public static String getTemporaryTableSchema(ConnectorSession session)
+    {
+        return session.getProperty(TEMPORARY_TABLE_SCHEMA, String.class);
+    }
+
+    public static HiveStorageFormat getTemporaryTableStorageFormat(ConnectorSession session)
+    {
+        return session.getProperty(TEMPORARY_TABLE_STORAGE_FORMAT, HiveStorageFormat.class);
+    }
+
+    public static HiveCompressionCodec getTemporaryTableCompressionCodec(ConnectorSession session)
+    {
+        return session.getProperty(TEMPORARY_TABLE_COMPRESSION_CODEC, HiveCompressionCodec.class);
+    }
+
+    public static boolean isPushdownFilterEnabled(ConnectorSession session)
+    {
+        return session.getProperty(PUSHDOWN_FILTER_ENABLED, Boolean.class);
+    }
+
+    public static int getVirtualBucketCount(ConnectorSession session)
+    {
+        int virtualBucketCount = session.getProperty(VIRTUAL_BUCKET_COUNT, Integer.class);
+        if (virtualBucketCount < 0) {
+            throw new PrestoException(INVALID_SESSION_PROPERTY, format("%s must not be negative: %s", VIRTUAL_BUCKET_COUNT, virtualBucketCount));
+        }
+        return virtualBucketCount;
     }
 
     public static PropertyMetadata<DataSize> dataSizeSessionProperty(String name, String description, DataSize defaultValue, boolean hidden)

@@ -79,6 +79,7 @@ CPU Time: 33.7s total,  191K rows/s, 16.6MB/s, 22% active
 Per Node: 2.5 parallelism,  473K rows/s, 41.1MB/s
 Parallelism: 2.5
 Peak Memory: 1.97GB
+Spilled: 20GB
 0:13 [6.45M rows,  560MB] [ 473K rows/s, 41.1MB/s] [=========>>           ] 20%
 
      STAGES   ROWS  ROWS/s  BYTES  BYTES/s   PEND    RUN   DONE
@@ -203,8 +204,13 @@ Peak Memory: 1.97GB
             // Parallelism: 5.3
             out.println(format("Parallelism: %.1f", parallelism));
 
-            //Peak Memory: 1.97GB
+            // Peak Memory: 1.97GB
             reprintLine("Peak Memory: " + formatDataSize(bytes(stats.getPeakMemoryBytes()), true));
+
+            // Spilled Data: 20GB
+            if (stats.getSpilledBytes() > 0) {
+                reprintLine("Spilled: " + formatDataSize(bytes(stats.getSpilledBytes()), true));
+            }
         }
 
         // 0:32 [2.12GB, 15M rows] [67MB/s, 463K rows/s]
@@ -294,12 +300,22 @@ Peak Memory: 1.97GB
                 // Parallelism: 5.3
                 reprintLine(format("Parallelism: %.1f", parallelism));
 
-                //Peak Memory: 1.97GB
+                // Peak Memory: 1.97GB
                 reprintLine("Peak Memory: " + formatDataSize(bytes(stats.getPeakMemoryBytes()), true));
+
+                // Spilled Data: 20GB
+                if (stats.getSpilledBytes() > 0) {
+                    reprintLine("Spilled: " + formatDataSize(bytes(stats.getSpilledBytes()), true));
+                }
             }
 
             verify(terminalWidth >= 75); // otherwise handled above
             int progressWidth = (min(terminalWidth, 100) - 75) + 17; // progress bar is 17-42 characters wide
+            String formattedWallTime = formatTime(wallTime);
+            if (formattedWallTime.length() > 5) {
+                // fix overflowed progress bar for queries running over 100 minutes
+                progressWidth -= formattedWallTime.length() - 5;
+            }
 
             if (stats.isScheduled()) {
                 String progressBar = formatProgressBar(progressWidth,
@@ -309,7 +325,7 @@ Peak Memory: 1.97GB
 
                 // 0:17 [ 103MB,  802K rows] [5.74MB/s, 44.9K rows/s] [=====>>                                   ] 10%
                 String progressLine = format("%s [%5s rows, %6s] [%5s rows/s, %8s] [%s] %d%%",
-                        formatTime(wallTime),
+                        formattedWallTime,
                         formatCount(stats.getProcessedRows()),
                         formatDataSize(bytes(stats.getProcessedBytes()), true),
                         formatCountRate(stats.getProcessedRows(), wallTime, false),
@@ -324,7 +340,7 @@ Peak Memory: 1.97GB
 
                 // 0:17 [ 103MB,  802K rows] [5.74MB/s, 44.9K rows/s] [    <=>                                  ]
                 String progressLine = format("%s [%5s rows, %6s] [%5s rows/s, %8s] [%s]",
-                        formatTime(wallTime),
+                        formattedWallTime,
                         formatCount(stats.getProcessedRows()),
                         formatDataSize(bytes(stats.getProcessedBytes()), true),
                         formatCountRate(stats.getProcessedRows(), wallTime, false),

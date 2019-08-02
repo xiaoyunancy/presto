@@ -15,8 +15,9 @@
 package com.facebook.presto.spi.statistics;
 
 import com.facebook.presto.spi.ColumnHandle;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
@@ -45,11 +46,13 @@ public final class TableStatistics
         this.columnStatistics = unmodifiableMap(requireNonNull(columnStatistics, "columnStatistics can not be null"));
     }
 
+    @JsonProperty
     public Estimate getRowCount()
     {
         return rowCount;
     }
 
+    @JsonProperty
     public Map<ColumnHandle, ColumnStatistics> getColumnStatistics()
     {
         return columnStatistics;
@@ -92,7 +95,7 @@ public final class TableStatistics
     public static final class Builder
     {
         private Estimate rowCount = Estimate.unknown();
-        private Map<ColumnHandle, ColumnStatistics> columnStatisticsMap = new HashMap<>();
+        private Map<ColumnHandle, ColumnStatistics> columnStatisticsMap = new LinkedHashMap<>();
 
         public Builder setRowCount(Estimate rowCount)
         {

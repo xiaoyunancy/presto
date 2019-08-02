@@ -13,7 +13,6 @@
  */
 package com.facebook.presto.operator.scalar.annotations;
 
-import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.operator.ParametricImplementationsGroup;
 import com.facebook.presto.operator.annotations.FunctionsParserHelper;
@@ -21,6 +20,7 @@ import com.facebook.presto.operator.scalar.ParametricScalar;
 import com.facebook.presto.operator.scalar.annotations.ParametricScalarImplementation.SpecializedSignature;
 import com.facebook.presto.spi.function.ScalarFunction;
 import com.facebook.presto.spi.function.ScalarOperator;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.function.SqlType;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -103,7 +103,7 @@ public final class ScalarFromAnnotationsParser
 
         Map<SpecializedSignature, ParametricScalarImplementation.Builder> signatures = new HashMap<>();
         for (Method method : scalar.getMethods()) {
-            ParametricScalarImplementation implementation = ParametricScalarImplementation.Parser.parseImplementation(header.getName(), method, constructor);
+            ParametricScalarImplementation implementation = ParametricScalarImplementation.Parser.parseImplementation(header, method, constructor);
             if (!signatures.containsKey(implementation.getSpecializedSignature())) {
                 ParametricScalarImplementation.Builder builder = new ParametricScalarImplementation.Builder(
                         implementation.getSignature(),

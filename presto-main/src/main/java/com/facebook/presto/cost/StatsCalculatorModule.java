@@ -40,8 +40,8 @@ public class StatsCalculatorModule
         ImmutableList.Builder<ComposableStatsCalculator.Rule<?>> rules = ImmutableList.builder();
         rules.add(new OutputStatsRule());
         rules.add(new TableScanStatsRule(metadata, normalizer));
-        rules.add(new SimpleFilterProjectSemiJoinStatsRule(normalizer, filterStatsCalculator)); // this must be before FilterStatsRule
-        rules.add(new FilterStatsRule(filterStatsCalculator));
+        rules.add(new SimpleFilterProjectSemiJoinStatsRule(normalizer, filterStatsCalculator, metadata.getFunctionManager())); // this must be before FilterStatsRule
+        rules.add(new FilterStatsRule(normalizer, filterStatsCalculator));
         rules.add(new ValuesStatsRule(metadata));
         rules.add(new LimitStatsRule(normalizer));
         rules.add(new EnforceSingleRowStatsRule(normalizer));
@@ -53,6 +53,9 @@ public class StatsCalculatorModule
         rules.add(new UnionStatsRule(normalizer));
         rules.add(new AssignUniqueIdStatsRule());
         rules.add(new SemiJoinStatsRule());
+        rules.add(new RowNumberStatsRule(normalizer));
+        rules.add(new UnnestStatsRule());
+        rules.add(new SortStatsRule());
 
         return new ComposableStatsCalculator(rules.build());
     }

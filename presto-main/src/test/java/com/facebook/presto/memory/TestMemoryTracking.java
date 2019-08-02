@@ -28,8 +28,8 @@ import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.TaskStats;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spiller.SpillSpaceTracker;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import io.airlift.stats.TestingGcMonitor;
 import io.airlift.units.DataSize;
 import org.testng.annotations.AfterClass;
@@ -64,7 +64,7 @@ public class TestMemoryTracking
     private static final DataSize queryMaxSpillSize = new DataSize(1, GIGABYTE);
     private static final SpillSpaceTracker spillSpaceTracker = new SpillSpaceTracker(maxSpillSize);
 
-    private DefaultQueryContext queryContext;
+    private QueryContext queryContext;
     private TaskContext taskContext;
     private PipelineContext pipelineContext;
     private DriverContext driverContext;
@@ -97,7 +97,7 @@ public class TestMemoryTracking
     public void setUpTest()
     {
         memoryPool = new MemoryPool(new MemoryPoolId("test"), memoryPoolSize);
-        queryContext = new DefaultQueryContext(
+        queryContext = new QueryContext(
                 new QueryId("test_query"),
                 queryMaxMemory,
                 queryMaxTotalMemory,
@@ -112,7 +112,8 @@ public class TestMemoryTracking
                 testSessionBuilder().build(),
                 true,
                 true,
-                OptionalInt.empty());
+                OptionalInt.empty(),
+                false);
         pipelineContext = taskContext.addPipelineContext(0, true, true, false);
         driverContext = pipelineContext.addDriverContext();
         operatorContext = driverContext.addOperatorContext(1, new PlanNodeId("a"), "test-operator");
@@ -155,7 +156,7 @@ public class TestMemoryTracking
             fail("allocation should hit the per-node total memory limit");
         }
         catch (ExceededMemoryLimitException e) {
-            assertEquals(e.getMessage(), format("Query exceeded per-node total memory limit of %s", queryMaxTotalMemory));
+            assertEquals(e.getMessage(), format("Query exceeded per-node total memory limit of %1$s [Allocated: %1$s, Delta: 1B, Top Consumers: {test=%1$s}]", queryMaxTotalMemory));
         }
     }
 
@@ -326,6 +327,16 @@ public class TestMemoryTracking
                 100_000_000,
                 0,
                 0);
+    }
+
+    @Test
+    public void testTrySetZeroBytesFullPool()
+    {
+        LocalMemoryContext localMemoryContext = operatorContext.localUserMemoryContext();
+        // fill up the pool
+        memoryPool.reserve(new QueryId("test_query"), "test", memoryPool.getFreeBytes());
+        // try to reserve 0 bytes in the full pool
+        assertTrue(localMemoryContext.trySetBytes(localMemoryContext.getBytes()));
     }
 
     @Test

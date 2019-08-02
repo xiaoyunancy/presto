@@ -52,6 +52,7 @@ import static com.google.common.collect.Iterables.transform;
 import static com.google.common.collect.Sets.newConcurrentHashSet;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.succinctBytes;
+import static io.airlift.units.Duration.succinctNanos;
 import static java.lang.Math.max;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
@@ -91,6 +92,8 @@ public class TaskContext
 
     private final OptionalInt totalPartitions;
 
+    private final boolean legacyLifespanCompletionCondition;
+
     private final Object cumulativeMemoryLock = new Object();
     private final AtomicDouble cumulativeUserMemory = new AtomicDouble(0.0);
 
@@ -112,9 +115,21 @@ public class TaskContext
             MemoryTrackingContext taskMemoryContext,
             boolean perOperatorCpuTimerEnabled,
             boolean cpuTimerEnabled,
-            OptionalInt totalPartitions)
+            OptionalInt totalPartitions,
+            boolean legacyLifespanCompletionCondition)
     {
-        TaskContext taskContext = new TaskContext(queryContext, taskStateMachine, gcMonitor, notificationExecutor, yieldExecutor, session, taskMemoryContext, perOperatorCpuTimerEnabled, cpuTimerEnabled, totalPartitions);
+        TaskContext taskContext = new TaskContext(
+                queryContext,
+                taskStateMachine,
+                gcMonitor,
+                notificationExecutor,
+                yieldExecutor,
+                session,
+                taskMemoryContext,
+                perOperatorCpuTimerEnabled,
+                cpuTimerEnabled,
+                totalPartitions,
+                legacyLifespanCompletionCondition);
         taskContext.initialize();
         return taskContext;
     }
@@ -128,7 +143,8 @@ public class TaskContext
             MemoryTrackingContext taskMemoryContext,
             boolean perOperatorCpuTimerEnabled,
             boolean cpuTimerEnabled,
-            OptionalInt totalPartitions)
+            OptionalInt totalPartitions,
+            boolean legacyLifespanCompletionCondition)
     {
         this.taskStateMachine = requireNonNull(taskStateMachine, "taskStateMachine is null");
         this.gcMonitor = requireNonNull(gcMonitor, "gcMonitor is null");
@@ -142,6 +158,7 @@ public class TaskContext
         this.perOperatorCpuTimerEnabled = perOperatorCpuTimerEnabled;
         this.cpuTimerEnabled = cpuTimerEnabled;
         this.totalPartitions = requireNonNull(totalPartitions, "totalPartitions is null");
+        this.legacyLifespanCompletionCondition = legacyLifespanCompletionCondition;
     }
 
     // the state change listener is added here in a separate initialize() method
@@ -295,6 +312,11 @@ public class TaskContext
     public boolean isCpuTimerEnabled()
     {
         return cpuTimerEnabled;
+    }
+
+    public boolean isLegacyLifespanCompletionCondition()
+    {
+        return legacyLifespanCompletionCondition;
     }
 
     public CounterStat getInputDataSize()
@@ -491,9 +513,9 @@ public class TaskContext
                 succinctBytes(userMemory),
                 succinctBytes(taskMemoryContext.getRevocableMemory()),
                 succinctBytes(taskMemoryContext.getSystemMemory()),
-                new Duration(totalScheduledTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
-                new Duration(totalCpuTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
-                new Duration(totalBlockedTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
+                succinctNanos(totalScheduledTime),
+                succinctNanos(totalCpuTime),
+                succinctNanos(totalBlockedTime),
                 fullyBlocked && (runningDrivers > 0 || runningPartitionedDrivers > 0),
                 blockedReasons,
                 succinctBytes(rawInputDataSize),

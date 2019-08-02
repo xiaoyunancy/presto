@@ -13,10 +13,14 @@
  */
 package com.facebook.presto.plugin.jdbc;
 
+import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplitSource;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.SchemaTableName;
+import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.statistics.TableStatistics;
 
 import javax.annotation.Nullable;
 
@@ -59,11 +63,21 @@ public interface JdbcClient
     PreparedStatement buildSql(Connection connection, JdbcSplit split, List<JdbcColumnHandle> columnHandles)
             throws SQLException;
 
-    JdbcOutputTableHandle beginCreateTable(ConnectorTableMetadata tableMetadata);
+    void addColumn(JdbcTableHandle handle, ColumnMetadata column);
+
+    void dropColumn(JdbcTableHandle handle, JdbcColumnHandle column);
+
+    void renameColumn(JdbcTableHandle handle, JdbcColumnHandle jdbcColumn, String newColumnName);
+
+    void renameTable(JdbcTableHandle handle, SchemaTableName newTableName);
+
+    void createTable(ConnectorTableMetadata tableMetadata);
+
+    JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata);
 
     void commitCreateTable(JdbcOutputTableHandle handle);
 
-    JdbcOutputTableHandle beginInsertTable(ConnectorTableMetadata tableMetadata);
+    JdbcOutputTableHandle beginInsertTable(ConnectorSession session, ConnectorTableMetadata tableMetadata);
 
     void finishInsertTable(JdbcOutputTableHandle handle);
 
@@ -78,4 +92,6 @@ public interface JdbcClient
 
     PreparedStatement getPreparedStatement(Connection connection, String sql)
             throws SQLException;
+
+    TableStatistics getTableStatistics(ConnectorSession session, JdbcTableHandle handle, TupleDomain<ColumnHandle> tupleDomain);
 }

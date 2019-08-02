@@ -31,30 +31,32 @@ import static java.util.Objects.requireNonNull;
 public final class ScalarFunctionImplementation
 {
     private final List<ScalarImplementationChoice> choices;
-    private final boolean deterministic;
 
     public ScalarFunctionImplementation(
             boolean nullable,
             List<ArgumentProperty> argumentProperties,
-            MethodHandle methodHandle,
-            boolean deterministic)
+            MethodHandle methodHandle)
     {
         this(
                 nullable,
                 argumentProperties,
                 methodHandle,
-                Optional.empty(),
-                deterministic);
+                Optional.empty());
     }
 
     public ScalarFunctionImplementation(
             boolean nullable,
             List<ArgumentProperty> argumentProperties,
             MethodHandle methodHandle,
-            Optional<MethodHandle> instanceFactory,
-            boolean deterministic)
+            Optional<MethodHandle> instanceFactory)
     {
-        this (ImmutableList.of(new ScalarImplementationChoice(nullable, argumentProperties, methodHandle, instanceFactory)), deterministic);
+        this(
+                ImmutableList.of(new ScalarImplementationChoice(
+                        nullable,
+                        argumentProperties,
+                        ReturnPlaceConvention.STACK,
+                        methodHandle,
+                        instanceFactory)));
     }
 
     /**
@@ -64,13 +66,12 @@ public final class ScalarFunctionImplementation
      * The first choice is the default choice, which is the one used for legacy access methods.
      * The default choice must be usable under any context. (e.g. it must not use BLOCK_POSITION convention.)
      *
-     * @param choices  the list of choices, ordered from generic to specific
+     * @param choices the list of choices, ordered from generic to specific
      */
-    public ScalarFunctionImplementation(List<ScalarImplementationChoice> choices, boolean deterministic)
+    public ScalarFunctionImplementation(List<ScalarImplementationChoice> choices)
     {
         checkArgument(!choices.isEmpty(), "choices is an empty list");
         this.choices = ImmutableList.copyOf(choices);
-        this.deterministic = deterministic;
     }
 
     public boolean isNullable()
@@ -98,15 +99,11 @@ public final class ScalarFunctionImplementation
         return choices;
     }
 
-    public boolean isDeterministic()
-    {
-        return deterministic;
-    }
-
     public static class ScalarImplementationChoice
     {
         private final boolean nullable;
         private final List<ArgumentProperty> argumentProperties;
+        private final ReturnPlaceConvention returnPlaceConvention;
         private final MethodHandle methodHandle;
         private final Optional<MethodHandle> instanceFactory;
         private final boolean hasSession;
@@ -114,11 +111,13 @@ public final class ScalarFunctionImplementation
         public ScalarImplementationChoice(
                 boolean nullable,
                 List<ArgumentProperty> argumentProperties,
+                ReturnPlaceConvention returnPlaceConvention,
                 MethodHandle methodHandle,
                 Optional<MethodHandle> instanceFactory)
         {
             this.nullable = nullable;
             this.argumentProperties = ImmutableList.copyOf(requireNonNull(argumentProperties, "argumentProperties is null"));
+            this.returnPlaceConvention = requireNonNull(returnPlaceConvention, "returnPlaceConvention is null");
             this.methodHandle = requireNonNull(methodHandle, "methodHandle is null");
             this.instanceFactory = requireNonNull(instanceFactory, "instanceFactory is null");
 
@@ -156,6 +155,11 @@ public final class ScalarFunctionImplementation
         public ArgumentProperty getArgumentProperty(int argumentIndex)
         {
             return argumentProperties.get(argumentIndex);
+        }
+
+        public ReturnPlaceConvention getReturnPlaceConvention()
+        {
+            return returnPlaceConvention;
         }
 
         public MethodHandle getMethodHandle()
@@ -278,5 +282,11 @@ public final class ScalarFunctionImplementation
     {
         VALUE_TYPE,
         FUNCTION_TYPE
+    }
+
+    public enum ReturnPlaceConvention
+    {
+        STACK,
+        PROVIDED_BLOCKBUILDER
     }
 }

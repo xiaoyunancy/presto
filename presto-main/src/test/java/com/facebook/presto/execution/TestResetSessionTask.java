@@ -16,6 +16,7 @@ package com.facebook.presto.execution;
 import com.facebook.presto.Session;
 import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.execution.warnings.WarningCollector;
+import com.facebook.presto.metadata.AnalyzePropertyManager;
 import com.facebook.presto.metadata.Catalog;
 import com.facebook.presto.metadata.CatalogManager;
 import com.facebook.presto.metadata.ColumnPropertyManager;
@@ -25,7 +26,7 @@ import com.facebook.presto.metadata.SessionPropertyManager;
 import com.facebook.presto.metadata.TablePropertyManager;
 import com.facebook.presto.security.AccessControl;
 import com.facebook.presto.security.AllowAllAccessControl;
-import com.facebook.presto.spi.QueryId;
+import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.ResetSession;
@@ -37,6 +38,7 @@ import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
 import java.net.URI;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 
@@ -72,6 +74,7 @@ public class TestResetSessionTask
                 new SchemaPropertyManager(),
                 new TablePropertyManager(),
                 new ColumnPropertyManager(),
+                new AnalyzePropertyManager(),
                 transactionManager);
 
         metadata.getSessionPropertyManager().addSystemSessionProperty(stringProperty(
@@ -104,10 +107,11 @@ public class TestResetSessionTask
                 .build();
 
         QueryStateMachine stateMachine = QueryStateMachine.begin(
-                new QueryId("query"),
                 "reset foo",
                 session,
                 URI.create("fake://uri"),
+                new ResourceGroupId("test"),
+                Optional.empty(),
                 false,
                 transactionManager,
                 accessControl,

@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.hive;
 
-import com.facebook.presto.hive.orc.DwrfPageSourceFactory;
-import com.facebook.presto.hive.orc.OrcPageSourceFactory;
+import com.facebook.presto.hive.orc.DwrfBatchPageSourceFactory;
+import com.facebook.presto.hive.orc.OrcBatchPageSourceFactory;
 import com.facebook.presto.hive.parquet.ParquetPageSourceFactory;
 import com.facebook.presto.hive.rcfile.RcFilePageSourceFactory;
 import com.facebook.presto.orc.OrcWriterOptions;
@@ -67,6 +67,7 @@ import static com.facebook.presto.hive.HiveStorageFormat.RCTEXT;
 import static com.facebook.presto.hive.HiveStorageFormat.SEQUENCEFILE;
 import static com.facebook.presto.hive.HiveStorageFormat.TEXTFILE;
 import static com.facebook.presto.hive.HiveTestUtils.HDFS_ENVIRONMENT;
+import static com.facebook.presto.hive.HiveTestUtils.HIVE_CLIENT_CONFIG;
 import static com.facebook.presto.hive.HiveTestUtils.SESSION;
 import static com.facebook.presto.hive.HiveTestUtils.TYPE_MANAGER;
 import static com.facebook.presto.hive.HiveTestUtils.getTypes;
@@ -92,7 +93,7 @@ public class TestHiveFileFormats
     private static TestingConnectorSession parquetPageSourceSession = new TestingConnectorSession(new HiveSessionProperties(createParquetHiveClientConfig(false), new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
     private static TestingConnectorSession parquetPageSourceSessionUseName = new TestingConnectorSession(new HiveSessionProperties(createParquetHiveClientConfig(true), new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
 
-    private static final DateTimeZone HIVE_STORAGE_TIME_ZONE = DateTimeZone.forID("Asia/Katmandu");
+    private static final DateTimeZone HIVE_STORAGE_TIME_ZONE = DateTimeZone.forID("America/Bahia_Banderas");
 
     @DataProvider(name = "rowCount")
     public static Object[][] rowCountProvider()
@@ -105,8 +106,8 @@ public class TestHiveFileFormats
     {
         // ensure the expected timezone is configured for this VM
         assertEquals(TimeZone.getDefault().getID(),
-                "Asia/Katmandu",
-                "Timezone not configured correctly. Add -Duser.timezone=Asia/Katmandu to your JVM arguments");
+                "America/Bahia_Banderas",
+                "Timezone not configured correctly. Add -Duser.timezone=America/Bahia_Banderas to your JVM arguments");
     }
 
     @Test(dataProvider = "rowCount")
@@ -261,7 +262,7 @@ public class TestHiveFileFormats
         assertThatFileFormat(ORC)
                 .withColumns(TEST_COLUMNS)
                 .withRowsCount(rowCount)
-                .isReadableByPageSource(new OrcPageSourceFactory(TYPE_MANAGER, false, HDFS_ENVIRONMENT, STATS));
+                .isReadableByPageSource(new OrcBatchPageSourceFactory(TYPE_MANAGER, false, HDFS_ENVIRONMENT, STATS, 100));
     }
 
     @Test(dataProvider = "rowCount")
@@ -287,7 +288,7 @@ public class TestHiveFileFormats
                 .withSession(session)
                 .withFileWriterFactory(new OrcFileWriterFactory(HDFS_ENVIRONMENT, TYPE_MANAGER, new NodeVersion("test"), HIVE_STORAGE_TIME_ZONE, STATS, new OrcWriterOptions()))
                 .isReadableByRecordCursor(new GenericHiveRecordCursorProvider(HDFS_ENVIRONMENT))
-                .isReadableByPageSource(new OrcPageSourceFactory(TYPE_MANAGER, false, HDFS_ENVIRONMENT, STATS));
+                .isReadableByPageSource(new OrcBatchPageSourceFactory(TYPE_MANAGER, false, HDFS_ENVIRONMENT, STATS, 100));
     }
 
     @Test(dataProvider = "rowCount")
@@ -301,7 +302,7 @@ public class TestHiveFileFormats
                 .withRowsCount(rowCount)
                 .withReadColumns(Lists.reverse(TEST_COLUMNS))
                 .withSession(session)
-                .isReadableByPageSource(new OrcPageSourceFactory(TYPE_MANAGER, true, HDFS_ENVIRONMENT, STATS));
+                .isReadableByPageSource(new OrcBatchPageSourceFactory(TYPE_MANAGER, true, HDFS_ENVIRONMENT, STATS, 100));
     }
 
     @Test(dataProvider = "rowCount")
@@ -392,7 +393,7 @@ public class TestHiveFileFormats
         assertThatFileFormat(DWRF)
                 .withColumns(testColumns)
                 .withRowsCount(rowCount)
-                .isReadableByPageSource(new DwrfPageSourceFactory(TYPE_MANAGER, HDFS_ENVIRONMENT, STATS));
+                .isReadableByPageSource(new DwrfBatchPageSourceFactory(TYPE_MANAGER, HIVE_CLIENT_CONFIG, HDFS_ENVIRONMENT, STATS));
     }
 
     @Test(dataProvider = "rowCount")
@@ -420,7 +421,7 @@ public class TestHiveFileFormats
                 .withSession(session)
                 .withFileWriterFactory(new OrcFileWriterFactory(HDFS_ENVIRONMENT, TYPE_MANAGER, new NodeVersion("test"), HIVE_STORAGE_TIME_ZONE, STATS, new OrcWriterOptions()))
                 .isReadableByRecordCursor(new GenericHiveRecordCursorProvider(HDFS_ENVIRONMENT))
-                .isReadableByPageSource(new DwrfPageSourceFactory(TYPE_MANAGER, HDFS_ENVIRONMENT, STATS));
+                .isReadableByPageSource(new DwrfBatchPageSourceFactory(TYPE_MANAGER, HIVE_CLIENT_CONFIG, HDFS_ENVIRONMENT, STATS));
     }
 
     @Test
@@ -445,7 +446,7 @@ public class TestHiveFileFormats
         assertThatFileFormat(ORC)
                 .withWriteColumns(ImmutableList.of(writeColumn))
                 .withReadColumns(ImmutableList.of(readColumn))
-                .isReadableByPageSource(new OrcPageSourceFactory(TYPE_MANAGER, false, HDFS_ENVIRONMENT, STATS));
+                .isReadableByPageSource(new OrcBatchPageSourceFactory(TYPE_MANAGER, false, HDFS_ENVIRONMENT, STATS, 100));
 
         assertThatFileFormat(PARQUET)
                 .withWriteColumns(ImmutableList.of(writeColumn))
@@ -493,7 +494,7 @@ public class TestHiveFileFormats
 
         assertThatFileFormat(ORC)
                 .withColumns(columns)
-                .isFailingForPageSource(new OrcPageSourceFactory(TYPE_MANAGER, false, HDFS_ENVIRONMENT, STATS), expectedErrorCode, expectedMessage);
+                .isFailingForPageSource(new OrcBatchPageSourceFactory(TYPE_MANAGER, false, HDFS_ENVIRONMENT, STATS, 100), expectedErrorCode, expectedMessage);
 
         assertThatFileFormat(PARQUET)
                 .withColumns(columns)
@@ -546,14 +547,15 @@ public class TestHiveFileFormats
                 DateTimeZone.getDefault(),
                 TYPE_MANAGER,
                 ImmutableMap.of(),
-                Optional.empty());
+                Optional.empty(),
+                false);
 
         RecordCursor cursor = ((RecordPageSource) pageSource.get()).getCursor();
 
         checkCursor(cursor, testColumns, rowCount);
     }
 
-    private void testPageSourceFactory(HivePageSourceFactory sourceFactory,
+    private void testPageSourceFactory(HiveBatchPageSourceFactory sourceFactory,
             FileSplit split,
             HiveStorageFormat storageFormat,
             List<TestColumn> testColumns,
@@ -591,7 +593,8 @@ public class TestHiveFileFormats
                 DateTimeZone.getDefault(),
                 TYPE_MANAGER,
                 ImmutableMap.of(),
-                Optional.empty());
+                Optional.empty(),
+                false);
 
         assertTrue(pageSource.isPresent());
 
@@ -716,7 +719,7 @@ public class TestHiveFileFormats
             return this;
         }
 
-        public FileFormatAssertion isReadableByPageSource(HivePageSourceFactory pageSourceFactory)
+        public FileFormatAssertion isReadableByPageSource(HiveBatchPageSourceFactory pageSourceFactory)
                 throws Exception
         {
             assertRead(Optional.of(pageSourceFactory), Optional.empty());
@@ -730,7 +733,7 @@ public class TestHiveFileFormats
             return this;
         }
 
-        public FileFormatAssertion isFailingForPageSource(HivePageSourceFactory pageSourceFactory, HiveErrorCode expectedErrorCode, String expectedMessage)
+        public FileFormatAssertion isFailingForPageSource(HiveBatchPageSourceFactory pageSourceFactory, HiveErrorCode expectedErrorCode, String expectedMessage)
                 throws Exception
         {
             assertFailure(Optional.of(pageSourceFactory), Optional.empty(), expectedErrorCode, expectedMessage);
@@ -744,7 +747,7 @@ public class TestHiveFileFormats
             return this;
         }
 
-        private void assertRead(Optional<HivePageSourceFactory> pageSourceFactory, Optional<HiveRecordCursorProvider> cursorProvider)
+        private void assertRead(Optional<HiveBatchPageSourceFactory> pageSourceFactory, Optional<HiveRecordCursorProvider> cursorProvider)
                 throws Exception
         {
             assertNotNull(storageFormat, "storageFormat must be specified");
@@ -788,7 +791,7 @@ public class TestHiveFileFormats
         }
 
         private void assertFailure(
-                Optional<HivePageSourceFactory> pageSourceFactory,
+                Optional<HiveBatchPageSourceFactory> pageSourceFactory,
                 Optional<HiveRecordCursorProvider> cursorProvider,
                 HiveErrorCode expectedErrorCode,
                 String expectedMessage)

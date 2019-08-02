@@ -68,37 +68,43 @@ import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.QUERY_REJECTED;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 
-public class KuduClientSession {
-
+public class KuduClientSession
+{
     public static final String DEFAULT_SCHEMA = "default";
     private final Logger log = Logger.get(getClass());
     private final KuduConnectorId connectorId;
     private final KuduClient client;
     private final SchemaEmulation schemaEmulation;
 
-    public KuduClientSession(KuduConnectorId connectorId, KuduClient client, SchemaEmulation schemaEmulation) {
+    public KuduClientSession(KuduConnectorId connectorId, KuduClient client, SchemaEmulation schemaEmulation)
+    {
         this.connectorId = connectorId;
         this.client = client;
         this.schemaEmulation = schemaEmulation;
     }
 
-    public List<String> listSchemaNames() {
+    public List<String> listSchemaNames()
+    {
         return schemaEmulation.listSchemaNames(client);
     }
 
-    private List<String> internalListTables(String prefix) {
+    private List<String> internalListTables(String prefix)
+    {
         try {
             if (prefix.isEmpty()) {
                 return client.getTablesList().getTablesList();
-            } else {
+            }
+            else {
                 return client.getTablesList(prefix).getTablesList();
             }
-        } catch (KuduException e) {
+        }
+        catch (KuduException e) {
             throw new PrestoException(GENERIC_INTERNAL_ERROR, e);
         }
     }
 
-    public List<SchemaTableName> listTables(Optional<String> optSchemaName) {
+    public List<SchemaTableName> listTables(Optional<String> optSchemaName)
+    {
         if (optSchemaName.isPresent()) {
             return listTablesSingleSchema(optSchemaName.get());
         }
@@ -111,29 +117,35 @@ public class KuduClientSession {
         return all;
     }
 
-    private List<SchemaTableName> listTablesSingleSchema(String schemaName) {
+    private List<SchemaTableName> listTablesSingleSchema(String schemaName)
+    {
         final String prefix = schemaEmulation.getPrefixForTablesOfSchema(schemaName);
 
         List<String> tables = internalListTables(prefix);
-        return tables.stream().map(schemaEmulation::fromRawName).filter(Objects::nonNull).collect(toImmutableList());
+        return tables.stream()
+                .map(schemaEmulation::fromRawName)
+                .filter(Objects::nonNull)
+                .collect(toImmutableList());
     }
 
-    public Schema getTableSchema(KuduTableHandle tableHandle) {
+    public Schema getTableSchema(KuduTableHandle tableHandle)
+    {
         KuduTable table = tableHandle.getTable(this);
         return table.getSchema();
     }
 
-    public Map<String, Object> getTableProperties(KuduTableHandle tableHandle) {
+    public Map<String, Object> getTableProperties(KuduTableHandle tableHandle)
+    {
         KuduTable table = tableHandle.getTable(this);
         return KuduTableProperties.toMap(table);
     }
 
-    public List<KuduSplit> buildKuduSplits(KuduTableLayoutHandle layoutHandle) {
+    public List<KuduSplit> buildKuduSplits(KuduTableLayoutHandle layoutHandle)
+    {
         KuduTableHandle tableHandle = layoutHandle.getTableHandle();
         KuduTable table = tableHandle.getTable(this);
         final int primaryKeyColumnCount = table.getSchema().getPrimaryKeyColumnCount();
-        log.debug(String.format("tablle %s primaryKeyColumnCount:%s", table.getName(), primaryKeyColumnCount));
-        KuduScanToken.KuduScanTokenBuilder builder = client.newScanTokenBuilder(table).batchSizeBytes(1024 * 1024 * 5);
+        KuduScanToken.KuduScanTokenBuilder builder = client.newScanTokenBuilder(table);
 
         TupleDomain<ColumnHandle> constraintSummary = layoutHandle.getConstraintSummary();
         if (!addConstraintPredicates(table, builder, constraintSummary)) {
@@ -143,8 +155,9 @@ public class KuduClientSession {
         Optional<Set<ColumnHandle>> desiredColumns = layoutHandle.getDesiredColumns();
         if (desiredColumns.isPresent()) {
             if (desiredColumns.get().contains(KuduColumnHandle.ROW_ID_HANDLE)) {
-                List<Integer> columnIndexes = IntStream.range(0, primaryKeyColumnCount).boxed()
-                    .collect(Collectors.toList());
+                List<Integer> columnIndexes = IntStream
+                        .range(0, primaryKeyColumnCount)
+                        .boxed().collect(Collectors.toList());
                 for (ColumnHandle columnHandle : desiredColumns.get()) {
                     if (columnHandle instanceof KuduColumnHandle) {
                         KuduColumnHandle k = (KuduColumnHandle) columnHandle;
@@ -155,31 +168,38 @@ public class KuduClientSession {
                     }
                 }
                 builder.setProjectedColumnIndexes(columnIndexes);
-            } else {
+            }
+            else {
                 List<Integer> columnIndexes = desiredColumns.get().stream()
-                    .map(handle -> ((KuduColumnHandle) handle).getOrdinalPosition()).collect(toImmutableList());
+                        .map(handle -> ((KuduColumnHandle) handle).getOrdinalPosition())
+                        .collect(toImmutableList());
                 builder.setProjectedColumnIndexes(columnIndexes);
             }
         }
 
         List<KuduScanToken> tokens = builder.build();
-        return tokens.stream().map(token -> toKuduSplit(tableHandle, token, primaryKeyColumnCount))
-            .collect(toImmutableList());
+        return tokens.stream()
+                .map(token -> toKuduSplit(tableHandle, token, primaryKeyColumnCount))
+                .collect(toImmutableList());
     }
 
-    public KuduScanner createScanner(KuduSplit kuduSplit) {
+    public KuduScanner createScanner(KuduSplit kuduSplit)
+    {
         try {
             return KuduScanToken.deserializeIntoScanner(kuduSplit.getSerializedScanToken(), client);
-        } catch (IOException e) {
+        }
+        catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
-    public KuduTable openTable(SchemaTableName schemaTableName) {
+    public KuduTable openTable(SchemaTableName schemaTableName)
+    {
         String rawName = schemaEmulation.toRawName(schemaTableName);
         try {
             return client.openTable(rawName);
-        } catch (KuduException e) {
+        }
+        catch (KuduException e) {
             log.debug("Error on doOpenTable: " + e, e);
             if (!listSchemaNames().contains(schemaTableName.getSchemaName())) {
                 throw new SchemaNotFoundException(schemaTableName.getSchemaName());
@@ -188,40 +208,48 @@ public class KuduClientSession {
         }
     }
 
-    public KuduSession newSession() {
+    public KuduSession newSession()
+    {
         return client.newSession();
     }
 
-    public void createSchema(String schemaName) {
+    public void createSchema(String schemaName)
+    {
         schemaEmulation.createSchema(client, schemaName);
     }
 
-    public void dropSchema(String schemaName) {
+    public void dropSchema(String schemaName)
+    {
         schemaEmulation.dropSchema(client, schemaName);
     }
 
-    public void dropTable(SchemaTableName schemaTableName) {
+    public void dropTable(SchemaTableName schemaTableName)
+    {
         try {
             String rawName = schemaEmulation.toRawName(schemaTableName);
             client.deleteTable(rawName);
-        } catch (KuduException e) {
+        }
+        catch (KuduException e) {
             throw new PrestoException(GENERIC_INTERNAL_ERROR, e);
         }
     }
 
-    public void renameTable(SchemaTableName schemaTableName, SchemaTableName newSchemaTableName) {
+    public void renameTable(SchemaTableName schemaTableName, SchemaTableName newSchemaTableName)
+    {
         try {
             String rawName = schemaEmulation.toRawName(schemaTableName);
             String newRawName = schemaEmulation.toRawName(newSchemaTableName);
             AlterTableOptions alterOptions = new AlterTableOptions();
             alterOptions.renameTable(newRawName);
             client.alterTable(rawName, alterOptions);
-        } catch (KuduException e) {
+        }
+        catch (KuduException e) {
             throw new PrestoException(GENERIC_INTERNAL_ERROR, e);
         }
     }
 
-    public KuduTable createTable(ConnectorTableMetadata tableMetadata, boolean ignoreExisting) {
+    public KuduTable createTable(ConnectorTableMetadata tableMetadata, boolean ignoreExisting)
+    {
         try {
             String rawName = schemaEmulation.toRawName(tableMetadata.getTable());
             if (ignoreExisting) {
@@ -240,55 +268,65 @@ public class KuduClientSession {
             Schema schema = buildSchema(columns, properties);
             CreateTableOptions options = buildCreateTableOptions(schema, properties);
             return client.createTable(rawName, schema, options);
-        } catch (KuduException e) {
+        }
+        catch (KuduException e) {
             throw new PrestoException(GENERIC_INTERNAL_ERROR, e);
         }
     }
 
-    public void addColumn(SchemaTableName schemaTableName, ColumnMetadata column) {
+    public void addColumn(SchemaTableName schemaTableName, ColumnMetadata column)
+    {
         try {
             String rawName = schemaEmulation.toRawName(schemaTableName);
             AlterTableOptions alterOptions = new AlterTableOptions();
             Type type = TypeHelper.toKuduClientType(column.getType());
             alterOptions.addNullableColumn(column.getName(), type);
             client.alterTable(rawName, alterOptions);
-        } catch (KuduException e) {
+        }
+        catch (KuduException e) {
             throw new PrestoException(GENERIC_INTERNAL_ERROR, e);
         }
     }
 
-    public void dropColumn(SchemaTableName schemaTableName, String name) {
+    public void dropColumn(SchemaTableName schemaTableName, String name)
+    {
         try {
             String rawName = schemaEmulation.toRawName(schemaTableName);
             AlterTableOptions alterOptions = new AlterTableOptions();
             alterOptions.dropColumn(name);
             client.alterTable(rawName, alterOptions);
-        } catch (KuduException e) {
+        }
+        catch (KuduException e) {
             throw new PrestoException(GENERIC_INTERNAL_ERROR, e);
         }
     }
 
-    public void renameColumn(SchemaTableName schemaTableName, String oldName, String newName) {
+    public void renameColumn(SchemaTableName schemaTableName, String oldName, String newName)
+    {
         try {
             String rawName = schemaEmulation.toRawName(schemaTableName);
             AlterTableOptions alterOptions = new AlterTableOptions();
             alterOptions.renameColumn(oldName, newName);
             client.alterTable(rawName, alterOptions);
-        } catch (KuduException e) {
+        }
+        catch (KuduException e) {
             throw new PrestoException(GENERIC_INTERNAL_ERROR, e);
         }
     }
 
-    public void addRangePartition(SchemaTableName schemaTableName, RangePartition rangePartition) {
+    public void addRangePartition(SchemaTableName schemaTableName, RangePartition rangePartition)
+    {
         changeRangePartition(schemaTableName, rangePartition, RangePartitionChange.ADD);
     }
 
-    public void dropRangePartition(SchemaTableName schemaTableName, RangePartition rangePartition) {
+    public void dropRangePartition(SchemaTableName schemaTableName, RangePartition rangePartition)
+    {
         changeRangePartition(schemaTableName, rangePartition, RangePartitionChange.DROP);
     }
 
     private void changeRangePartition(SchemaTableName schemaTableName, RangePartition rangePartition,
-        RangePartitionChange change) {
+            RangePartitionChange change)
+    {
         try {
             String rawName = schemaEmulation.toRawName(schemaTableName);
             KuduTable table = client.openTable(rawName);
@@ -298,10 +336,8 @@ public class KuduClientSession {
             if (definition == null) {
                 throw new PrestoException(QUERY_REJECTED, "Table " + schemaTableName + " has no range partition");
             }
-            PartialRow lowerBound = KuduTableProperties
-                .toRangeBoundToPartialRow(schema, definition, rangePartition.getLower());
-            PartialRow upperBound = KuduTableProperties
-                .toRangeBoundToPartialRow(schema, definition, rangePartition.getUpper());
+            PartialRow lowerBound = KuduTableProperties.toRangeBoundToPartialRow(schema, definition, rangePartition.getLower());
+            PartialRow upperBound = KuduTableProperties.toRangeBoundToPartialRow(schema, definition, rangePartition.getUpper());
             AlterTableOptions alterOptions = new AlterTableOptions();
             switch (change) {
                 case ADD:
@@ -312,20 +348,22 @@ public class KuduClientSession {
                     break;
             }
             client.alterTable(rawName, alterOptions);
-        } catch (PrestoException e) {
-            throw e;
-        } catch (KuduException e) {
+        }
+        catch (KuduException e) {
             throw new PrestoException(GENERIC_INTERNAL_ERROR, e);
         }
     }
 
-    private Schema buildSchema(List<ColumnMetadata> columns, Map<String, Object> tableProperties) {
-        List<ColumnSchema> kuduColumns = columns.stream().map(this::toColumnSchema)
-            .collect(ImmutableList.toImmutableList());
+    private Schema buildSchema(List<ColumnMetadata> columns, Map<String, Object> tableProperties)
+    {
+        List<ColumnSchema> kuduColumns = columns.stream()
+                .map(this::toColumnSchema)
+                .collect(ImmutableList.toImmutableList());
         return new Schema(kuduColumns);
     }
 
-    private ColumnSchema toColumnSchema(ColumnMetadata columnMetadata) {
+    private ColumnSchema toColumnSchema(ColumnMetadata columnMetadata)
+    {
         String name = columnMetadata.getName();
         ColumnDesign design = KuduTableProperties.getColumnDesign(columnMetadata.getProperties());
         Type ktype = TypeHelper.toKuduClientType(columnMetadata.getType());
@@ -337,41 +375,45 @@ public class KuduClientSession {
         return builder.build();
     }
 
-    private void setTypeAttributes(ColumnMetadata columnMetadata, ColumnSchema.ColumnSchemaBuilder builder) {
+    private void setTypeAttributes(ColumnMetadata columnMetadata, ColumnSchema.ColumnSchemaBuilder builder)
+    {
         if (columnMetadata.getType() instanceof DecimalType) {
             DecimalType type = (DecimalType) columnMetadata.getType();
             ColumnTypeAttributes attributes = new ColumnTypeAttributes.ColumnTypeAttributesBuilder()
-                .precision(type.getPrecision()).scale(type.getScale()).build();
+                    .precision(type.getPrecision())
+                    .scale(type.getScale()).build();
             builder.typeAttributes(attributes);
         }
     }
 
-    private void setCompression(String name, ColumnSchema.ColumnSchemaBuilder builder, ColumnDesign design) {
+    private void setCompression(String name, ColumnSchema.ColumnSchemaBuilder builder, ColumnDesign design)
+    {
         if (design.getCompression() != null) {
             try {
-                ColumnSchema.CompressionAlgorithm algorithm = KuduTableProperties
-                    .lookupCompression(design.getCompression());
+                ColumnSchema.CompressionAlgorithm algorithm = KuduTableProperties.lookupCompression(design.getCompression());
                 builder.compressionAlgorithm(algorithm);
-            } catch (IllegalArgumentException e) {
-                throw new PrestoException(GENERIC_INTERNAL_ERROR,
-                    "Unknown compression algorithm " + design.getCompression() + " for column " + name);
+            }
+            catch (IllegalArgumentException e) {
+                throw new PrestoException(GENERIC_INTERNAL_ERROR, "Unknown compression algorithm " + design.getCompression() + " for column " + name);
             }
         }
     }
 
-    private void setEncoding(String name, ColumnSchema.ColumnSchemaBuilder builder, ColumnDesign design) {
+    private void setEncoding(String name, ColumnSchema.ColumnSchemaBuilder builder, ColumnDesign design)
+    {
         if (design.getEncoding() != null) {
             try {
                 ColumnSchema.Encoding encoding = KuduTableProperties.lookupEncoding(design.getEncoding());
                 builder.encoding(encoding);
-            } catch (IllegalArgumentException e) {
-                throw new PrestoException(GENERIC_INTERNAL_ERROR,
-                    "Unknown encoding " + design.getEncoding() + " for column " + name);
+            }
+            catch (IllegalArgumentException e) {
+                throw new PrestoException(GENERIC_INTERNAL_ERROR, "Unknown encoding " + design.getEncoding() + " for column " + name);
             }
         }
     }
 
-    private CreateTableOptions buildCreateTableOptions(Schema schema, Map<String, Object> properties) {
+    private CreateTableOptions buildCreateTableOptions(Schema schema, Map<String, Object> properties)
+    {
         CreateTableOptions options = new CreateTableOptions();
 
         RangePartitionDefinition rangePartitionDefinition = null;
@@ -389,10 +431,8 @@ public class KuduClientSession {
         List<RangePartition> rangePartitions = KuduTableProperties.getRangePartitions(properties);
         if (rangePartitionDefinition != null && !rangePartitions.isEmpty()) {
             for (RangePartition rangePartition : rangePartitions) {
-                PartialRow lower = KuduTableProperties
-                    .toRangeBoundToPartialRow(schema, rangePartitionDefinition, rangePartition.getLower());
-                PartialRow upper = KuduTableProperties
-                    .toRangeBoundToPartialRow(schema, rangePartitionDefinition, rangePartition.getUpper());
+                PartialRow lower = KuduTableProperties.toRangeBoundToPartialRow(schema, rangePartitionDefinition, rangePartition.getLower());
+                PartialRow upper = KuduTableProperties.toRangeBoundToPartialRow(schema, rangePartitionDefinition, rangePartition.getUpper());
                 options.addRangePartition(lower, upper);
             }
         }
@@ -409,10 +449,12 @@ public class KuduClientSession {
      * @return false if TupleDomain or one of its domains is none
      */
     private boolean addConstraintPredicates(KuduTable table, KuduScanToken.KuduScanTokenBuilder builder,
-        TupleDomain<ColumnHandle> constraintSummary) {
+            TupleDomain<ColumnHandle> constraintSummary)
+    {
         if (constraintSummary.isNone()) {
             return false;
-        } else if (!constraintSummary.isAll()) {
+        }
+        else if (!constraintSummary.isAll()) {
             Schema schema = table.getSchema();
             for (TupleDomain.ColumnDomain<ColumnHandle> columnDomain : constraintSummary.getColumnDomains().get()) {
                 int position = ((KuduColumnHandle) columnDomain.getColumn()).getOrdinalPosition();
@@ -420,41 +462,46 @@ public class KuduClientSession {
                 Domain domain = columnDomain.getDomain();
                 if (domain.isNone()) {
                     return false;
-                } else if (domain.isAll()) {
+                }
+                else if (domain.isAll()) {
                     // no restriction
-                } else if (domain.isOnlyNull()) {
+                }
+                else if (domain.isOnlyNull()) {
                     builder.addPredicate(KuduPredicate.newIsNullPredicate(columnSchema));
-                } else if (domain.getValues().isAll() && domain.isNullAllowed()) {
+                }
+                else if (domain.getValues().isAll() && domain.isNullAllowed()) {
                     builder.addPredicate(KuduPredicate.newIsNotNullPredicate(columnSchema));
-                } else if (domain.isSingleValue()) {
+                }
+                else if (domain.isSingleValue()) {
                     KuduPredicate predicate = createEqualsPredicate(columnSchema, domain.getSingleValue());
                     builder.addPredicate(predicate);
-                } else {
+                }
+                else {
                     ValueSet valueSet = domain.getValues();
                     if (valueSet instanceof EquatableValueSet) {
                         DiscreteValues discreteValues = valueSet.getDiscreteValues();
                         KuduPredicate predicate = createInListPredicate(columnSchema, discreteValues);
                         builder.addPredicate(predicate);
-                    } else if (valueSet instanceof SortedRangeSet) {
+                    }
+                    else if (valueSet instanceof SortedRangeSet) {
                         Ranges ranges = ((SortedRangeSet) valueSet).getRanges();
                         Range span = ranges.getSpan();
                         Marker low = span.getLow();
                         if (!low.isLowerUnbounded()) {
-                            KuduPredicate.ComparisonOp op = (low.getBound() == Marker.Bound.ABOVE) ?
-                                KuduPredicate.ComparisonOp.GREATER :
-                                KuduPredicate.ComparisonOp.GREATER_EQUAL;
+                            KuduPredicate.ComparisonOp op = (low.getBound() == Marker.Bound.ABOVE)
+                                    ? KuduPredicate.ComparisonOp.GREATER : KuduPredicate.ComparisonOp.GREATER_EQUAL;
                             KuduPredicate predicate = createComparisonPredicate(columnSchema, op, low.getValue());
                             builder.addPredicate(predicate);
                         }
                         Marker high = span.getHigh();
                         if (!high.isUpperUnbounded()) {
-                            KuduPredicate.ComparisonOp op = (low.getBound() == Marker.Bound.BELOW) ?
-                                KuduPredicate.ComparisonOp.LESS :
-                                KuduPredicate.ComparisonOp.LESS_EQUAL;
+                            KuduPredicate.ComparisonOp op = (low.getBound() == Marker.Bound.BELOW)
+                                    ? KuduPredicate.ComparisonOp.LESS : KuduPredicate.ComparisonOp.LESS_EQUAL;
                             KuduPredicate predicate = createComparisonPredicate(columnSchema, op, high.getValue());
                             builder.addPredicate(predicate);
                         }
-                    } else {
+                    }
+                    else {
                         throw new IllegalStateException("Unexpected domain: " + domain);
                     }
                 }
@@ -463,53 +510,68 @@ public class KuduClientSession {
         return true;
     }
 
-    private KuduPredicate createInListPredicate(ColumnSchema columnSchema, DiscreteValues discreteValues) {
+    private KuduPredicate createInListPredicate(ColumnSchema columnSchema, DiscreteValues discreteValues)
+    {
         com.facebook.presto.spi.type.Type type = TypeHelper.fromKuduColumn(columnSchema);
-        List<Object> javaValues = discreteValues.getValues().stream().map(value -> TypeHelper.getJavaValue(type, value))
-            .collect(toImmutableList());
+        List<Object> javaValues = discreteValues.getValues().stream().map(value -> TypeHelper.getJavaValue(type, value)).collect(toImmutableList());
         return KuduPredicate.newInListPredicate(columnSchema, javaValues);
     }
 
-    private KuduPredicate createEqualsPredicate(ColumnSchema columnSchema, Object value) {
+    private KuduPredicate createEqualsPredicate(ColumnSchema columnSchema, Object value)
+    {
         return createComparisonPredicate(columnSchema, KuduPredicate.ComparisonOp.EQUAL, value);
     }
 
-    private KuduPredicate createComparisonPredicate(ColumnSchema columnSchema, KuduPredicate.ComparisonOp op,
-        Object value) {
+    private KuduPredicate createComparisonPredicate(ColumnSchema columnSchema,
+            KuduPredicate.ComparisonOp op,
+            Object value)
+    {
         com.facebook.presto.spi.type.Type type = TypeHelper.fromKuduColumn(columnSchema);
         Object javaValue = TypeHelper.getJavaValue(type, value);
         if (javaValue instanceof Long) {
             return KuduPredicate.newComparisonPredicate(columnSchema, op, (Long) javaValue);
-        } else if (javaValue instanceof Integer) {
+        }
+        else if (javaValue instanceof Integer) {
             return KuduPredicate.newComparisonPredicate(columnSchema, op, (Integer) javaValue);
-        } else if (javaValue instanceof Short) {
+        }
+        else if (javaValue instanceof Short) {
             return KuduPredicate.newComparisonPredicate(columnSchema, op, (Short) javaValue);
-        } else if (javaValue instanceof Byte) {
+        }
+        else if (javaValue instanceof Byte) {
             return KuduPredicate.newComparisonPredicate(columnSchema, op, (Byte) javaValue);
-        } else if (javaValue instanceof String) {
+        }
+        else if (javaValue instanceof String) {
             return KuduPredicate.newComparisonPredicate(columnSchema, op, (String) javaValue);
-        } else if (javaValue instanceof Double) {
+        }
+        else if (javaValue instanceof Double) {
             return KuduPredicate.newComparisonPredicate(columnSchema, op, (Double) javaValue);
-        } else if (javaValue instanceof Float) {
+        }
+        else if (javaValue instanceof Float) {
             return KuduPredicate.newComparisonPredicate(columnSchema, op, (Float) javaValue);
-        } else if (javaValue instanceof Boolean) {
+        }
+        else if (javaValue instanceof Boolean) {
             return KuduPredicate.newComparisonPredicate(columnSchema, op, (Boolean) javaValue);
-        } else if (javaValue instanceof byte[]) {
+        }
+        else if (javaValue instanceof byte[]) {
             return KuduPredicate.newComparisonPredicate(columnSchema, op, (byte[]) javaValue);
-        } else if (javaValue == null) {
+        }
+        else if (javaValue == null) {
             throw new IllegalStateException("Unexpected null java value for column " + columnSchema.getName());
-        } else {
-            throw new IllegalStateException(
-                "Unexpected java value for column " + columnSchema.getName() + ": " + javaValue + "(" + javaValue
-                    .getClass() + ")");
+        }
+        else {
+            throw new IllegalStateException("Unexpected java value for column "
+                    + columnSchema.getName() + ": " + javaValue + "(" + javaValue.getClass() + ")");
         }
     }
 
-    private KuduSplit toKuduSplit(KuduTableHandle tableHandle, KuduScanToken token, int primaryKeyColumnCount) {
+    private KuduSplit toKuduSplit(KuduTableHandle tableHandle, KuduScanToken token,
+            int primaryKeyColumnCount)
+    {
         try {
             byte[] serializedScanToken = token.serialize();
             return new KuduSplit(tableHandle, primaryKeyColumnCount, serializedScanToken);
-        } catch (IOException e) {
+        }
+        catch (IOException e) {
             throw new PrestoException(GENERIC_INTERNAL_ERROR, e);
         }
     }

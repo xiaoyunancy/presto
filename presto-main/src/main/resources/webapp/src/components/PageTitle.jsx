@@ -11,11 +11,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+//@flow
 import React from "react";
 
-export class PageTitle extends React.Component {
-    constructor(props) {
+type Props = {
+    title: string
+}
+
+type State = {
+    noConnection: boolean,
+    lightShown: boolean,
+    info: ?any,
+    lastSuccess: number,
+    modalShown: boolean,
+    errorText: ?string,
+}
+
+export class PageTitle extends React.Component<Props, State> {
+    timeoutId: TimeoutID;
+
+    constructor(props: Props) {
         super(props);
         this.state = {
             noConnection: false,
@@ -25,23 +40,24 @@ export class PageTitle extends React.Component {
             modalShown: false,
             errorText: null,
         };
-
-        this.refreshLoop = this.refreshLoop.bind(this);
     }
 
     refreshLoop() {
         clearTimeout(this.timeoutId);
-        $.get("/v1/info", function (info) {
-            this.setState({
-                info: info,
-                noConnection: false,
-                lastSuccess: Date.now(),
-                modalShown: false,
-            });
-            $('#no-connection-modal').modal('hide');
-            this.resetTimer();
-        }.bind(this))
-            .error(function (jqXHR, textStatus, error) {
+        fetch("/v1/info")
+            .then(response => response.json())
+            .then(info => {
+                this.setState({
+                    info: info,
+                    noConnection: false,
+                    lastSuccess: Date.now(),
+                    modalShown: false,
+                });
+                //$FlowFixMe$ Bootstrap 3 plugin
+                $('#no-connection-modal').modal('hide');
+                this.resetTimer();
+            })
+            .catch(error => {
                 this.setState({
                     noConnection: true,
                     lightShown: !this.state.lightShown,
@@ -50,19 +66,20 @@ export class PageTitle extends React.Component {
                 this.resetTimer();
 
                 if (!this.state.modalShown && (error || (Date.now() - this.state.lastSuccess) > 30 * 1000)) {
+                    //$FlowFixMe$ Bootstrap 3 plugin
                     $('#no-connection-modal').modal();
                     this.setState({modalShown: true});
                 }
-            }.bind(this));
+        });
     }
 
     resetTimer() {
         clearTimeout(this.timeoutId);
-        this.timeoutId = setTimeout(this.refreshLoop, 1000);
+        this.timeoutId = setTimeout(this.refreshLoop.bind(this), 1000);
     }
 
     componentDidMount() {
-        this.refreshLoop();
+        this.refreshLoop.bind(this)();
     }
 
     renderStatusLight() {
@@ -92,7 +109,7 @@ export class PageTitle extends React.Component {
                                 <tbody>
                                 <tr>
                                     <td>
-                                        <a href="/"><img src="assets/logo.png"/></a>
+                                        <a href="/ui/"><img src="assets/logo.png"/></a>
                                     </td>
                                     <td>
                                         <span className="navbar-brand">{this.props.title}</span>

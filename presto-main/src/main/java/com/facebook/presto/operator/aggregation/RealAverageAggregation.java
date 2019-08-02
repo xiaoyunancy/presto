@@ -13,8 +13,9 @@
  */
 package com.facebook.presto.operator.aggregation;
 
+import com.facebook.presto.bytecode.DynamicClassLoader;
 import com.facebook.presto.metadata.BoundVariables;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlAggregationFunction;
 import com.facebook.presto.operator.aggregation.AggregationMetadata.AccumulatorStateDescriptor;
 import com.facebook.presto.operator.aggregation.state.DoubleState;
@@ -27,7 +28,6 @@ import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
-import io.airlift.bytecode.DynamicClassLoader;
 
 import java.lang.invoke.MethodHandle;
 import java.util.List;
@@ -70,7 +70,7 @@ public class RealAverageAggregation
     }
 
     @Override
-    public InternalAggregationFunction specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public InternalAggregationFunction specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         DynamicClassLoader classLoader = new DynamicClassLoader(AverageAggregations.class.getClassLoader());
         Class<? extends AccumulatorState> longStateInterface = LongState.class;
@@ -85,14 +85,14 @@ public class RealAverageAggregation
                 COMBINE_FUNCTION,
                 OUTPUT_FUNCTION,
                 ImmutableList.of(
-                    new AccumulatorStateDescriptor(
-                            longStateInterface,
-                            longStateSerializer,
-                            StateCompiler.generateStateFactory(longStateInterface, classLoader)),
-                    new AccumulatorStateDescriptor(
-                            doubleStateInterface,
-                            doubleStateSerializer,
-                            StateCompiler.generateStateFactory(doubleStateInterface, classLoader))),
+                        new AccumulatorStateDescriptor(
+                                longStateInterface,
+                                longStateSerializer,
+                                StateCompiler.generateStateFactory(longStateInterface, classLoader)),
+                        new AccumulatorStateDescriptor(
+                                doubleStateInterface,
+                                doubleStateSerializer,
+                                StateCompiler.generateStateFactory(doubleStateInterface, classLoader))),
                 REAL);
 
         GenericAccumulatorFactoryBinder factory = AccumulatorCompiler.generateAccumulatorFactoryBinder(metadata, classLoader);

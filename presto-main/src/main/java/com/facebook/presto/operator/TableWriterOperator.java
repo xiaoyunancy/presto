@@ -14,17 +14,18 @@
 package com.facebook.presto.operator;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.operator.OperationTimer.OperationTiming;
 import com.facebook.presto.spi.ConnectorPageSink;
 import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.PageBuilder;
+import com.facebook.presto.spi.PageSinkProperties;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.RunLengthEncodedBlock;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.split.PageSinkManager;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.TableWriterNode.WriterTarget;
 import com.facebook.presto.util.AutoCloseableCloser;
 import com.facebook.presto.util.Mergeable;
@@ -33,6 +34,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
+import io.airlift.json.JsonCodec;
 import io.airlift.slice.Slice;
 import io.airlift.units.Duration;
 
@@ -52,6 +54,8 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.util.concurrent.Futures.allAsList;
 import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static io.airlift.concurrent.MoreFutures.toListenableFuture;
+import static io.airlift.slice.Slices.wrappedBuffer;
+import static io.airlift.units.Duration.succinctNanos;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
@@ -60,7 +64,8 @@ public class TableWriterOperator
 {
     public static final int ROW_COUNT_CHANNEL = 0;
     public static final int FRAGMENT_CHANNEL = 1;
-    private static final int WRITER_CHANNELS = 2;
+    public static final int CONTEXT_CHANNEL = 2;
+    public static final int STATS_START_CHANNEL = 3;
 
     public static class TableWriterOperatorFactory
             implements OperatorFactory
@@ -73,16 +78,21 @@ public class TableWriterOperator
         private final Session session;
         private final OperatorFactory statisticsAggregationOperatorFactory;
         private final List<Type> types;
+        private final boolean partitionCommitRequired;
         private boolean closed;
+        private final JsonCodec<TableCommitContext> tableCommitContextCodec;
 
-        public TableWriterOperatorFactory(int operatorId,
+        public TableWriterOperatorFactory(
+                int operatorId,
                 PlanNodeId planNodeId,
                 PageSinkManager pageSinkManager,
                 WriterTarget writerTarget,
                 List<Integer> columnChannels,
                 Session session,
                 OperatorFactory statisticsAggregationOperatorFactory,
-                List<Type> types)
+                List<Type> types,
+                JsonCodec<TableCommitContext> tableCommitContextCodec,
+                boolean partitionCommitRequired)
         {
             this.operatorId = operatorId;
             this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
@@ -93,6 +103,8 @@ public class TableWriterOperator
             this.session = session;
             this.statisticsAggregationOperatorFactory = requireNonNull(statisticsAggregationOperatorFactory, "statisticsAggregationOperatorFactory is null");
             this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
+            this.tableCommitContextCodec = requireNonNull(tableCommitContextCodec, "tableCommitContextCodec is null");
+            this.partitionCommitRequired = partitionCommitRequired;
         }
 
         @Override
@@ -102,16 +114,24 @@ public class TableWriterOperator
             OperatorContext context = driverContext.addOperatorContext(operatorId, planNodeId, TableWriterOperator.class.getSimpleName());
             Operator statisticsAggregationOperator = statisticsAggregationOperatorFactory.createOperator(driverContext);
             boolean statisticsCpuTimerEnabled = !(statisticsAggregationOperator instanceof DevNullOperator) && isStatisticsCpuTimerEnabled(session);
-            return new TableWriterOperator(context, createPageSink(), columnChannels, statisticsAggregationOperator, types, statisticsCpuTimerEnabled);
+            return new TableWriterOperator(
+                    context,
+                    createPageSink(),
+                    columnChannels,
+                    statisticsAggregationOperator,
+                    types,
+                    statisticsCpuTimerEnabled,
+                    tableCommitContextCodec,
+                    partitionCommitRequired);
         }
 
         private ConnectorPageSink createPageSink()
         {
             if (target instanceof CreateHandle) {
-                return pageSinkManager.createPageSink(session, ((CreateHandle) target).getHandle());
+                return pageSinkManager.createPageSink(session, ((CreateHandle) target).getHandle(), PageSinkProperties.builder().setPartitionCommitRequired(partitionCommitRequired).build());
             }
             if (target instanceof InsertHandle) {
-                return pageSinkManager.createPageSink(session, ((InsertHandle) target).getHandle());
+                return pageSinkManager.createPageSink(session, ((InsertHandle) target).getHandle(), PageSinkProperties.builder().setPartitionCommitRequired(partitionCommitRequired).build());
             }
             throw new UnsupportedOperationException("Unhandled target type: " + target.getClass().getName());
         }
@@ -125,7 +145,7 @@ public class TableWriterOperator
         @Override
         public OperatorFactory duplicate()
         {
-            return new TableWriterOperatorFactory(operatorId, planNodeId, pageSinkManager, target, columnChannels, session, statisticsAggregationOperatorFactory, types);
+            return new TableWriterOperatorFactory(operatorId, planNodeId, pageSinkManager, target, columnChannels, session, statisticsAggregationOperatorFactory, types, tableCommitContextCodec, partitionCommitRequired);
         }
     }
 
@@ -153,13 +173,18 @@ public class TableWriterOperator
     private final OperationTiming statisticsTiming = new OperationTiming();
     private final boolean statisticsCpuTimerEnabled;
 
+    private final JsonCodec<TableCommitContext> tableCommitContextCodec;
+    private final boolean partitionCommitRequired;
+
     public TableWriterOperator(
             OperatorContext operatorContext,
             ConnectorPageSink pageSink,
             List<Integer> columnChannels,
             Operator statisticAggregationOperator,
             List<Type> types,
-            boolean statisticsCpuTimerEnabled)
+            boolean statisticsCpuTimerEnabled,
+            JsonCodec<TableCommitContext> tableCommitContextCodec,
+            boolean partitionCommitRequired)
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.pageSinkMemoryContext = operatorContext.newLocalSystemMemoryContext(TableWriterOperator.class.getSimpleName());
@@ -169,6 +194,8 @@ public class TableWriterOperator
         this.statisticAggregationOperator = requireNonNull(statisticAggregationOperator, "statisticAggregationOperator is null");
         this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
         this.statisticsCpuTimerEnabled = statisticsCpuTimerEnabled;
+        this.tableCommitContextCodec = requireNonNull(tableCommitContextCodec, "tableCommitContextCodec is null");
+        this.partitionCommitRequired = partitionCommitRequired;
     }
 
     @Override
@@ -268,7 +295,7 @@ public class TableWriterOperator
         int positionCount = fragmentsPage.getPositionCount();
         Block[] outputBlocks = new Block[types.size()];
         for (int channel = 0; channel < types.size(); channel++) {
-            if (channel < WRITER_CHANNELS) {
+            if (channel < STATS_START_CHANNEL) {
                 outputBlocks[channel] = fragmentsPage.getBlock(channel);
             }
             else {
@@ -280,46 +307,78 @@ public class TableWriterOperator
         return new Page(positionCount, outputBlocks);
     }
 
+    // Statistics page layout:
+    //
+    // row     fragments     context     stats1     stats2 ...
+    // null       null          X          X          X
+    // null       null          X          X          X
+    // null       null          X          X          X
+    // null       null          X          X          X
+    // ...
     private Page createStatisticsPage(Page aggregationOutput)
     {
         int positionCount = aggregationOutput.getPositionCount();
         Block[] outputBlocks = new Block[types.size()];
         for (int channel = 0; channel < types.size(); channel++) {
-            if (channel < WRITER_CHANNELS) {
-                outputBlocks[channel] = RunLengthEncodedBlock.create(types.get(channel), null, positionCount);
+            if (channel < STATS_START_CHANNEL) {
+                // Include table commit context into statistics page to allow TableFinishOperator publish correct statistics for recoverable grouped execution.
+                if (channel == CONTEXT_CHANNEL) {
+                    outputBlocks[channel] = RunLengthEncodedBlock.create(types.get(channel), getTableCommitContext(false), positionCount);
+                }
+                else {
+                    outputBlocks[channel] = RunLengthEncodedBlock.create(types.get(channel), null, positionCount);
+                }
             }
             else {
-                outputBlocks[channel] = aggregationOutput.getBlock(channel - 2);
+                outputBlocks[channel] = aggregationOutput.getBlock(channel - STATS_START_CHANNEL);
             }
         }
         return new Page(positionCount, outputBlocks);
     }
 
+    // Fragments page layout:
+    //
+    // row     fragments     context
+    //  X         null          X
+    // null        X            X
+    // null        X            X
+    // null        X            X
+    // ...
     private Page createFragmentsPage()
     {
         Collection<Slice> fragments = getFutureValue(finishFuture);
+        int positionCount = fragments.size() + 1;
         committed = true;
         updateWrittenBytes();
 
-        // output page will only be constructed once,
-        // so a new PageBuilder is constructed (instead of using PageBuilder.reset)
-        PageBuilder page = new PageBuilder(fragments.size() + 1, ImmutableList.of(types.get(ROW_COUNT_CHANNEL), types.get(FRAGMENT_CHANNEL)));
-        BlockBuilder rowsBuilder = page.getBlockBuilder(0);
-        BlockBuilder fragmentBuilder = page.getBlockBuilder(1);
+        // Output page will only be constructed once, and the table commit context channel will be constructed using RunLengthEncodedBlock.
+        // Thus individual BlockBuilder is used for each channel, instead of using PageBuilder.
+        BlockBuilder rowsBuilder = BIGINT.createBlockBuilder(null, positionCount);
+        BlockBuilder fragmentBuilder = VARBINARY.createBlockBuilder(null, positionCount);
 
         // write row count
-        page.declarePosition();
         BIGINT.writeLong(rowsBuilder, rowCount);
         fragmentBuilder.appendNull();
 
         // write fragments
         for (Slice fragment : fragments) {
-            page.declarePosition();
             rowsBuilder.appendNull();
             VARBINARY.writeSlice(fragmentBuilder, fragment);
         }
 
-        return page.build();
+        return new Page(positionCount, rowsBuilder.build(), fragmentBuilder.build(), RunLengthEncodedBlock.create(VARBINARY, getTableCommitContext(true), positionCount));
+    }
+
+    private Slice getTableCommitContext(boolean lastPage)
+    {
+        TaskId taskId = operatorContext.getDriverContext().getPipelineContext().getTaskId();
+        return wrappedBuffer(tableCommitContextCodec.toJsonBytes(
+                new TableCommitContext(
+                        operatorContext.getDriverContext().getLifespan(),
+                        taskId.getStageId().getId(),
+                        taskId.getId(),
+                        partitionCommitRequired,
+                        lastPage)));
     }
 
     @Override
@@ -363,9 +422,9 @@ public class TableWriterOperator
     {
         return new TableWriterInfo(
                 pageSinkPeakMemoryUsage.get(),
-                new Duration(statisticsTiming.getWallNanos(), NANOSECONDS).convertToMostSuccinctTimeUnit(),
-                new Duration(statisticsTiming.getCpuNanos(), NANOSECONDS).convertToMostSuccinctTimeUnit(),
-                new Duration(pageSink.getValidationCpuNanos(), NANOSECONDS).convertToMostSuccinctTimeUnit());
+                succinctNanos(statisticsTiming.getWallNanos()),
+                succinctNanos(statisticsTiming.getCpuNanos()),
+                succinctNanos(pageSink.getValidationCpuNanos()));
     }
 
     public static class TableWriterInfo
@@ -418,9 +477,9 @@ public class TableWriterOperator
         {
             return new TableWriterInfo(
                     Math.max(pageSinkPeakMemoryUsage, other.pageSinkPeakMemoryUsage),
-                    new Duration(statisticsWallTime.getValue(NANOSECONDS) + other.statisticsWallTime.getValue(NANOSECONDS), NANOSECONDS).convertToMostSuccinctTimeUnit(),
-                    new Duration(statisticsCpuTime.getValue(NANOSECONDS) + other.statisticsCpuTime.getValue(NANOSECONDS), NANOSECONDS).convertToMostSuccinctTimeUnit(),
-                    new Duration(validationCpuTime.getValue(NANOSECONDS) + other.validationCpuTime.getValue(NANOSECONDS), NANOSECONDS).convertToMostSuccinctTimeUnit());
+                    succinctNanos(statisticsWallTime.roundTo(NANOSECONDS) + other.statisticsWallTime.roundTo(NANOSECONDS)),
+                    succinctNanos(statisticsCpuTime.roundTo(NANOSECONDS) + other.statisticsCpuTime.roundTo(NANOSECONDS)),
+                    succinctNanos(validationCpuTime.roundTo(NANOSECONDS) + other.validationCpuTime.roundTo(NANOSECONDS)));
         }
 
         @Override

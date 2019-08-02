@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.Symbol;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.util.List;
@@ -53,20 +53,10 @@ public interface LookupSourceFactory
     @Override
     OuterPositionIterator getOuterPositionIterator();
 
-    Map<Symbol, Integer> getLayout();
+    Map<VariableReferenceExpression, Integer> getLayout();
 
     // this is only here for the index lookup source
     default void setTaskContext(TaskContext taskContext) {}
-
-    default ListenableFuture<?> lendPartitionLookupSource(int partitionIndex, Supplier<LookupSource> partitionLookupSource)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    default void setPartitionSpilledLookupSourceHandle(int partitionIndex, SpilledLookupSourceHandle spilledLookupSourceHandle)
-    {
-        throw new UnsupportedOperationException();
-    }
 
     @Override
     void destroy();

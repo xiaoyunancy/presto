@@ -19,6 +19,7 @@ import com.facebook.presto.memory.VersionedMemoryPoolId;
 import com.facebook.presto.server.BasicQueryInfo;
 import com.facebook.presto.spi.ErrorCode;
 import com.facebook.presto.spi.QueryId;
+import com.facebook.presto.spi.resourceGroups.QueryType;
 import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
 import com.facebook.presto.sql.planner.Plan;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -44,16 +45,14 @@ public class FailedQueryExecution
 {
     private final QueryInfo queryInfo;
     private final Session session;
-    private final Optional<ResourceGroupId> resourceGroup;
     private final Executor executor;
 
-    public FailedQueryExecution(Session session, String query, URI self, Optional<ResourceGroupId> resourceGroup, Executor executor, Throwable cause)
+    public FailedQueryExecution(Session session, String query, URI self, Optional<ResourceGroupId> resourceGroup, Optional<QueryType> queryType, Executor executor, Throwable cause)
     {
         requireNonNull(cause, "cause is null");
         this.session = requireNonNull(session, "session is null");
-        this.resourceGroup = requireNonNull(resourceGroup, "resourceGroup is null");
         this.executor = requireNonNull(executor, "executor is null");
-        this.queryInfo = immediateFailureQueryInfo(session, query, self, cause);
+        this.queryInfo = immediateFailureQueryInfo(session, query, self, resourceGroup, queryType, cause);
     }
 
     @Override
@@ -216,17 +215,5 @@ public class FailedQueryExecution
     public void pruneInfo()
     {
         // no-op
-    }
-
-    @Override
-    public Optional<ResourceGroupId> getResourceGroup()
-    {
-        return resourceGroup;
-    }
-
-    @Override
-    public void setResourceGroup(ResourceGroupId resourceGroupId)
-    {
-        throw new UnsupportedOperationException("setResourceGroup is not supported for FailedQueryExecution");
     }
 }

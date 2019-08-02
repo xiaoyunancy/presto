@@ -44,6 +44,7 @@ import static java.lang.String.format;
 public class ConvexHullAggregation
 {
     private static final Joiner OR_JOINER = Joiner.on(" or ");
+
     private ConvexHullAggregation() {}
 
     @InputFunction
@@ -52,10 +53,11 @@ public class ConvexHullAggregation
     {
         OGCGeometry geometry = GeometrySerde.deserialize(input);
         if (state.getGeometry() == null) {
-            state.setGeometry(geometry.convexHull());
+            state.setGeometry(geometry.convexHull(), 0);
         }
         else if (!geometry.isEmpty()) {
-            state.setGeometry(state.getGeometry().union(geometry).convexHull());
+            long previousMemorySize = state.getGeometry().estimateMemorySize();
+            state.setGeometry(state.getGeometry().union(geometry).convexHull(), previousMemorySize);
         }
     }
 
@@ -64,10 +66,11 @@ public class ConvexHullAggregation
             @AggregationState GeometryState otherState)
     {
         if (state.getGeometry() == null) {
-            state.setGeometry(otherState.getGeometry());
+            state.setGeometry(otherState.getGeometry(), 0);
         }
         else if (otherState.getGeometry() != null && !otherState.getGeometry().isEmpty()) {
-            state.setGeometry(state.getGeometry().union(otherState.getGeometry()).convexHull());
+            long previousMemorySize = state.getGeometry().estimateMemorySize();
+            state.setGeometry(state.getGeometry().union(otherState.getGeometry()).convexHull(), previousMemorySize);
         }
     }
 

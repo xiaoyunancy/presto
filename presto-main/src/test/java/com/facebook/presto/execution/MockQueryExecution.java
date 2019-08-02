@@ -45,7 +45,6 @@ import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.succinctBytes;
-import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
@@ -114,11 +113,11 @@ public class MockQueryExecution
                         new Duration(6, NANOSECONDS),
                         new Duration(5, NANOSECONDS),
                         new Duration(31, NANOSECONDS),
+                        new Duration(41, NANOSECONDS),
                         new Duration(7, NANOSECONDS),
                         new Duration(8, NANOSECONDS),
 
                         new Duration(100, NANOSECONDS),
-                        new Duration(200, NANOSECONDS),
 
                         9,
                         10,
@@ -136,6 +135,7 @@ public class MockQueryExecution
                         new DataSize(20, BYTE),
                         new DataSize(21, BYTE),
                         new DataSize(22, BYTE),
+                        new DataSize(23, BYTE),
 
                         true,
                         new Duration(20, NANOSECONDS),
@@ -152,9 +152,10 @@ public class MockQueryExecution
 
                         new DataSize(28, BYTE),
                         29,
-
-                        new DataSize(30, BYTE),
-
+                        30,
+                        new DataSize(31, BYTE),
+                        new DataSize(32, BYTE),
+                        new DataSize(33, BYTE),
                         ImmutableList.of(),
                         ImmutableList.of()),
                 Optional.empty(),
@@ -162,6 +163,7 @@ public class MockQueryExecution
                 Optional.empty(),
                 ImmutableMap.of(),
                 ImmutableSet.of(),
+                ImmutableMap.of(),
                 ImmutableMap.of(),
                 ImmutableSet.of(),
                 Optional.empty(),
@@ -174,6 +176,8 @@ public class MockQueryExecution
                 ImmutableSet.of(),
                 Optional.empty(),
                 state.isDone(),
+                Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
     }
 
@@ -276,18 +280,6 @@ public class MockQueryExecution
     public Duration getTotalCpuTime()
     {
         return cpuUsage;
-    }
-
-    @Override
-    public Optional<ResourceGroupId> getResourceGroup()
-    {
-        return this.resourceGroupId;
-    }
-
-    @Override
-    public void setResourceGroup(ResourceGroupId resourceGroupId)
-    {
-        this.resourceGroupId = Optional.of(requireNonNull(resourceGroupId, "resourceGroupId is null"));
     }
 
     @Override

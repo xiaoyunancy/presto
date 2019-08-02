@@ -34,14 +34,16 @@ public class ExceededMemoryLimitException
         return new ExceededMemoryLimitException(EXCEEDED_GLOBAL_MEMORY_LIMIT, format("Query exceeded distributed total memory limit of %s", maxMemory));
     }
 
-    public static ExceededMemoryLimitException exceededLocalUserMemoryLimit(DataSize maxMemory)
+    public static ExceededMemoryLimitException exceededLocalUserMemoryLimit(DataSize maxMemory, String additionalFailureInfo)
     {
-        return new ExceededMemoryLimitException(EXCEEDED_LOCAL_MEMORY_LIMIT, format("Query exceeded per-node user memory limit of %s", maxMemory));
+        return new ExceededMemoryLimitException(EXCEEDED_LOCAL_MEMORY_LIMIT,
+                format("Query exceeded per-node user memory limit of %s [%s]", maxMemory, additionalFailureInfo));
     }
 
-    public static ExceededMemoryLimitException exceededLocalTotalMemoryLimit(DataSize maxMemory)
+    public static ExceededMemoryLimitException exceededLocalTotalMemoryLimit(DataSize maxMemory, String additionalFailureInfo)
     {
-        return new ExceededMemoryLimitException(EXCEEDED_LOCAL_MEMORY_LIMIT, format("Query exceeded per-node total memory limit of %s", maxMemory));
+        return new ExceededMemoryLimitException(EXCEEDED_LOCAL_MEMORY_LIMIT,
+                format("Query exceeded per-node total memory limit of %s [%s]", maxMemory, additionalFailureInfo));
     }
 
     private ExceededMemoryLimitException(StandardErrorCode errorCode, String message)

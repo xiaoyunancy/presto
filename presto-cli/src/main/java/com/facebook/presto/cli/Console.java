@@ -15,6 +15,7 @@ package com.facebook.presto.cli;
 
 import com.facebook.presto.cli.ClientOptions.OutputFormat;
 import com.facebook.presto.client.ClientSession;
+import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.sql.parser.StatementSplitter;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
@@ -103,7 +104,7 @@ public class Console
                 throw new RuntimeException("both --execute and --file specified");
             }
             try {
-                query = Files.toString(new File(clientOptions.file), UTF_8);
+                query = Files.asCharSource(new File(clientOptions.file), UTF_8).read();
                 hasQuery = true;
             }
             catch (IOException e) {
@@ -344,6 +345,13 @@ public class Console
                 sessionProperties.putAll(query.getSetSessionProperties());
                 sessionProperties.keySet().removeAll(query.getResetSessionProperties());
                 builder = builder.withProperties(sessionProperties);
+            }
+
+            // update session roles
+            if (!query.getSetRoles().isEmpty()) {
+                Map<String, SelectedRole> roles = new HashMap<>(session.getRoles());
+                roles.putAll(query.getSetRoles());
+                builder = builder.withRoles(roles);
             }
 
             // update prepared statements if present

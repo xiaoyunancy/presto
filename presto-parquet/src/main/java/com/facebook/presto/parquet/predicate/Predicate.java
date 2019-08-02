@@ -13,8 +13,10 @@
  */
 package com.facebook.presto.parquet.predicate;
 
-import parquet.column.ColumnDescriptor;
-import parquet.column.statistics.Statistics;
+import com.facebook.presto.parquet.ParquetCorruptionException;
+import com.facebook.presto.parquet.ParquetDataSourceId;
+import org.apache.parquet.column.ColumnDescriptor;
+import org.apache.parquet.column.statistics.Statistics;
 
 import java.util.Map;
 
@@ -23,7 +25,8 @@ public interface Predicate
     Predicate TRUE = new Predicate()
     {
         @Override
-        public boolean matches(long numberOfRows, Map<ColumnDescriptor, Statistics<?>> statistics)
+        public boolean matches(long numberOfRows, Map<ColumnDescriptor, Statistics<?>> statistics, ParquetDataSourceId id, boolean failOnCorruptedParquetStatistics)
+                throws ParquetCorruptionException
         {
             return true;
         }
@@ -41,8 +44,11 @@ public interface Predicate
      * @param numberOfRows the number of rows in the segment; this can be used with
      * Statistics to determine if a column is only null
      * @param statistics column statistics
+     * @param id Parquet file name
+     * @param failOnCorruptedParquetStatistics whether to fail query when scanning a Parquet file with corrupted statistics
      */
-    boolean matches(long numberOfRows, Map<ColumnDescriptor, Statistics<?>> statistics);
+    boolean matches(long numberOfRows, Map<ColumnDescriptor, Statistics<?>> statistics, ParquetDataSourceId id, boolean failOnCorruptedParquetStatistics)
+            throws ParquetCorruptionException;
 
     /**
      * Should the Parquet Reader process a file section with the specified dictionary.

@@ -18,8 +18,8 @@ import com.facebook.presto.operator.NestedLoopBuildOperator.NestedLoopBuildOpera
 import com.facebook.presto.operator.NestedLoopJoinOperator.NestedLoopJoinOperatorFactory;
 import com.facebook.presto.operator.NestedLoopJoinOperator.NestedLoopPageBuilder;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.TestingTaskContext;
 import com.google.common.collect.ImmutableList;
@@ -475,14 +475,14 @@ public class TestNestedLoopJoinOperator
 
         ValuesOperatorFactory valuesOperatorFactory = new ValuesOperatorFactory(0, new PlanNodeId("test"), buildPages.build());
 
-        JoinBridgeManager<NestedLoopJoinPagesBridge> nestedLoopJoinPagesBridgeManager = new JoinBridgeManager<>(
+        JoinBridgeManager<NestedLoopJoinBridge> nestedLoopJoinBridgeManager = new JoinBridgeManager<>(
                 false,
                 PipelineExecutionStrategy.UNGROUPED_EXECUTION,
                 PipelineExecutionStrategy.UNGROUPED_EXECUTION,
                 lifespan -> new NestedLoopJoinPagesSupplier(),
                 buildPages.getTypes());
-        NestedLoopBuildOperatorFactory nestedLoopBuildOperatorFactory = new NestedLoopBuildOperatorFactory(1, new PlanNodeId("test"), nestedLoopJoinPagesBridgeManager);
-        NestedLoopJoinOperatorFactory joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinPagesBridgeManager);
+        NestedLoopBuildOperatorFactory nestedLoopBuildOperatorFactory = new NestedLoopBuildOperatorFactory(1, new PlanNodeId("test"), nestedLoopJoinBridgeManager);
+        NestedLoopJoinOperatorFactory joinOperatorFactory = new NestedLoopJoinOperatorFactory(3, new PlanNodeId("test"), nestedLoopJoinBridgeManager);
 
         Operator valuesOperator = valuesOperatorFactory.createOperator(driverContext);
         Operator nestedLoopBuildOperator = nestedLoopBuildOperatorFactory.createOperator(driverContext);

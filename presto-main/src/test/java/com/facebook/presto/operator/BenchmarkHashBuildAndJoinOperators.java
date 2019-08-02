@@ -17,9 +17,9 @@ import com.facebook.presto.RowPagesBuilder;
 import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.operator.HashBuilderOperator.HashBuilderOperatorFactory;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spiller.SingleStreamSpillerFactory;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.TestingTaskContext;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -185,7 +185,7 @@ public class BenchmarkHashBuildAndJoinOperators
         protected List<Page> probePages;
         protected List<Integer> outputChannels;
 
-        protected JoinBridgeManager<LookupSourceFactory> lookupSourceFactory;
+        protected JoinBridgeManager<PartitionedLookupSourceFactory> lookupSourceFactory;
 
         @Override
         @Setup
@@ -211,7 +211,7 @@ public class BenchmarkHashBuildAndJoinOperators
             initializeProbePages();
         }
 
-        public JoinBridgeManager<LookupSourceFactory> getLookupSourceFactory()
+        public JoinBridgeManager<PartitionedLookupSourceFactory> getLookupSourceFactory()
         {
             return lookupSourceFactory;
         }
@@ -275,16 +275,16 @@ public class BenchmarkHashBuildAndJoinOperators
     }
 
     @Benchmark
-    public JoinBridgeManager<LookupSourceFactory> benchmarkBuildHash(BuildContext buildContext)
+    public JoinBridgeManager<PartitionedLookupSourceFactory> benchmarkBuildHash(BuildContext buildContext)
     {
         return benchmarkBuildHash(buildContext, ImmutableList.of(0, 1, 2));
     }
 
-    private JoinBridgeManager<LookupSourceFactory> benchmarkBuildHash(BuildContext buildContext, List<Integer> outputChannels)
+    private JoinBridgeManager<PartitionedLookupSourceFactory> benchmarkBuildHash(BuildContext buildContext, List<Integer> outputChannels)
     {
         DriverContext driverContext = buildContext.createTaskContext().addPipelineContext(0, true, true, false).addDriverContext();
 
-        JoinBridgeManager<LookupSourceFactory> lookupSourceFactoryManager = JoinBridgeManager.lookupAllAtOnce(new PartitionedLookupSourceFactory(
+        JoinBridgeManager<PartitionedLookupSourceFactory> lookupSourceFactoryManager = JoinBridgeManager.lookupAllAtOnce(new PartitionedLookupSourceFactory(
                 buildContext.getTypes(),
                 outputChannels.stream()
                         .map(buildContext.getTypes()::get)

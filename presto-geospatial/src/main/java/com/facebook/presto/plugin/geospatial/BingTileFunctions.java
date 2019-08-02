@@ -150,7 +150,7 @@ public class BingTileFunctions
         return BingTile.fromQuadKey(quadKey.toStringUtf8()).encode();
     }
 
-    @Description("Given a (longitude, latitude) point, returns the containing Bing tile at the specified zoom level")
+    @Description("Given a (latitude, longitude) point, returns the containing Bing tile at the specified zoom level")
     @ScalarFunction("bing_tile_at")
     @SqlType(BingTileType.NAME)
     public static long bingTileAt(
@@ -432,7 +432,7 @@ public class BingTileFunctions
     {
         if (pointOrRectangle) {
             checkCondition(tileCount <= 1_000_000, "The number of tiles covering input rectangle exceeds the limit of 1M. " +
-                    "Number of tiles: %d. Rectangle: xMin=%.2f, yMin=%.2f, xMax=%.2f, yMax=%.2f. Zoom level: %d.",
+                            "Number of tiles: %d. Rectangle: xMin=%.2f, yMin=%.2f, xMax=%.2f, yMax=%.2f. Zoom level: %d.",
                     tileCount, envelope.getXMin(), envelope.getYMin(), envelope.getXMax(), envelope.getYMax(), zoomLevel);
         }
         else {

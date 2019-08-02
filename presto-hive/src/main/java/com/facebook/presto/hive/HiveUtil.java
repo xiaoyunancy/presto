@@ -18,6 +18,7 @@ import com.facebook.presto.hive.avro.PrestoAvroSerDe;
 import com.facebook.presto.hive.metastore.Column;
 import com.facebook.presto.hive.metastore.Table;
 import com.facebook.presto.hive.util.FooterAwareRecordReader;
+import com.facebook.presto.orc.OrcReader;
 import com.facebook.presto.spi.ConnectorTableHandle;
 import com.facebook.presto.spi.ErrorCodeSupplier;
 import com.facebook.presto.spi.PrestoException;
@@ -34,6 +35,7 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
 import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import io.airlift.compress.lzo.LzoCodec;
 import io.airlift.compress.lzo.LzopCodec;
 import io.airlift.slice.Slice;
@@ -55,6 +57,8 @@ import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector;
 import org.apache.hadoop.hive.serde2.typeinfo.StructTypeInfo;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
+import org.apache.hadoop.io.compress.CompressionCodec;
+import org.apache.hadoop.io.compress.CompressionCodecFactory;
 import org.apache.hadoop.mapred.FileSplit;
 import org.apache.hadoop.mapred.InputFormat;
 import org.apache.hadoop.mapred.JobConf;
@@ -73,12 +77,14 @@ import org.joda.time.format.ISODateTimeFormat;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Properties;
@@ -94,14 +100,17 @@ import static com.facebook.presto.hive.HiveColumnHandle.isPathColumnHandle;
 import static com.facebook.presto.hive.HiveColumnHandle.pathColumnHandle;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_BAD_DATA;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_CANNOT_OPEN_SPLIT;
+import static com.facebook.presto.hive.HiveErrorCode.HIVE_FILE_MISSING_COLUMN_NAMES;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_INVALID_METADATA;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_INVALID_PARTITION_VALUE;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_INVALID_VIEW_DATA;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_SERDE_NOT_FOUND;
+import static com.facebook.presto.hive.HiveErrorCode.HIVE_TABLE_BUCKETING_IS_IGNORED;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_UNSUPPORTED_FORMAT;
 import static com.facebook.presto.hive.HivePartitionKey.HIVE_DEFAULT_DYNAMIC_PARTITION;
 import static com.facebook.presto.hive.util.ConfigurationUtils.copy;
 import static com.facebook.presto.hive.util.ConfigurationUtils.toJobConf;
+import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
@@ -109,6 +118,8 @@ import static com.facebook.presto.spi.type.Chars.isCharType;
 import static com.facebook.presto.spi.type.Chars.trimTrailingSpaces;
 import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
+import static com.facebook.presto.spi.type.Decimals.isLongDecimal;
+import static com.facebook.presto.spi.type.Decimals.isShortDecimal;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.RealType.REAL;
@@ -144,6 +155,8 @@ import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Cate
 
 public final class HiveUtil
 {
+    private static final Pattern DEFAULT_HIVE_COLUMN_NAME_PATTERN = Pattern.compile("_col\\d+");
+
     public static final String PRESTO_VIEW_FLAG = "presto_view";
 
     private static final String VIEW_PREFIX = "/* Presto View: ";
@@ -151,6 +164,7 @@ public final class HiveUtil
 
     private static final DateTimeFormatter HIVE_DATE_PARSER = ISODateTimeFormat.date().withZoneUTC();
     private static final DateTimeFormatter HIVE_TIMESTAMP_PARSER;
+    private static final Field COMPRESSION_CODECS_FIELD;
 
     private static final Pattern SUPPORTED_DECIMAL_TYPE = Pattern.compile(DECIMAL_TYPE_NAME + "\\((\\d+),(\\d+)\\)");
     private static final int DECIMAL_PRECISION_GROUP = 1;
@@ -169,6 +183,14 @@ public final class HiveUtil
         };
         DateTimePrinter timestampWithoutTimeZonePrinter = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.SSSSSSSSS").getPrinter();
         HIVE_TIMESTAMP_PARSER = new DateTimeFormatterBuilder().append(timestampWithoutTimeZonePrinter, timestampWithoutTimeZoneParser).toFormatter().withZoneUTC();
+
+        try {
+            COMPRESSION_CODECS_FIELD = TextInputFormat.class.getDeclaredField("compressionCodecs");
+            COMPRESSION_CODECS_FIELD.setAccessible(true);
+        }
+        catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private HiveUtil()
@@ -237,6 +259,24 @@ public final class HiveUtil
     {
         configuration.set(READ_COLUMN_IDS_CONF_STR, Joiner.on(',').join(readHiveColumnIndexes));
         configuration.setBoolean(READ_ALL_COLUMNS, false);
+    }
+
+    public static Optional<CompressionCodec> getCompressionCodec(TextInputFormat inputFormat, Path file)
+    {
+        CompressionCodecFactory compressionCodecFactory;
+
+        try {
+            compressionCodecFactory = (CompressionCodecFactory) COMPRESSION_CODECS_FIELD.get(inputFormat);
+        }
+        catch (IllegalAccessException e) {
+            throw new PrestoException(GENERIC_INTERNAL_ERROR, "Failed to find compressionCodec for inputFormat: " + inputFormat.getClass().getName(), e);
+        }
+
+        if (compressionCodecFactory == null) {
+            return Optional.empty();
+        }
+
+        return Optional.ofNullable(compressionCodecFactory.getCodec(file));
     }
 
     static InputFormat<?, ?> getInputFormat(Configuration configuration, Properties schema, boolean symlinkTarget)
@@ -868,6 +908,9 @@ public final class HiveUtil
             return path.toString();
         }
         if (isBucketColumnHandle(columnHandle)) {
+            if (!bucketNumber.isPresent()) {
+                throw new PrestoException(HIVE_TABLE_BUCKETING_IS_IGNORED, "Table bucketing is ignored. The virtual \"$bucket\" column cannot be referenced.");
+            }
             return String.valueOf(bucketNumber.getAsInt());
         }
         throw new PrestoException(NOT_SUPPORTED, "unsupported hidden column: " + columnHandle);
@@ -918,5 +961,103 @@ public final class HiveUtil
         catch (NumberFormatException e) {
             throw new PrestoException(HIVE_INVALID_METADATA, format("Invalid value for %s property: %s", key, value));
         }
+    }
+
+    public static Object typedPartitionKey(String value, Type type, String name, DateTimeZone hiveStorageTimeZone)
+    {
+        byte[] bytes = value.getBytes(UTF_8);
+
+        if (isHiveNull(bytes)) {
+            return null;
+        }
+        else if (type.equals(BOOLEAN)) {
+            return booleanPartitionKey(value, name);
+        }
+        else if (type.equals(BIGINT)) {
+            return bigintPartitionKey(value, name);
+        }
+        else if (type.equals(INTEGER)) {
+            return integerPartitionKey(value, name);
+        }
+        else if (type.equals(SMALLINT)) {
+            return smallintPartitionKey(value, name);
+        }
+        else if (type.equals(TINYINT)) {
+            return tinyintPartitionKey(value, name);
+        }
+        else if (type.equals(REAL)) {
+            return floatPartitionKey(value, name);
+        }
+        else if (type.equals(DOUBLE)) {
+            return doublePartitionKey(value, name);
+        }
+        else if (isVarcharType(type)) {
+            return varcharPartitionKey(value, name, type);
+        }
+        else if (isCharType(type)) {
+            return charPartitionKey(value, name, type);
+        }
+        else if (type.equals(DATE)) {
+            return datePartitionKey(value, name);
+        }
+        else if (type.equals(TIMESTAMP)) {
+            return timestampPartitionKey(value, hiveStorageTimeZone, name);
+        }
+        else if (isShortDecimal(type)) {
+            return shortDecimalPartitionKey(value, (DecimalType) type, name);
+        }
+        else if (isLongDecimal(type)) {
+            return longDecimalPartitionKey(value, (DecimalType) type, name);
+        }
+        else {
+            throw new PrestoException(NOT_SUPPORTED, format("Unsupported column type %s for partition column: %s", type.getDisplayName(), name));
+        }
+    }
+
+    public static List<HiveColumnHandle> getPhysicalHiveColumnHandles(List<HiveColumnHandle> columns, boolean useOrcColumnNames, OrcReader reader, Path path)
+    {
+        if (!useOrcColumnNames) {
+            return columns;
+        }
+
+        verifyFileHasColumnNames(reader.getColumnNames(), path);
+
+        Map<String, Integer> physicalNameOrdinalMap = buildPhysicalNameOrdinalMap(reader);
+        int nextMissingColumnIndex = physicalNameOrdinalMap.size();
+
+        ImmutableList.Builder<HiveColumnHandle> physicalColumns = ImmutableList.builder();
+        for (HiveColumnHandle column : columns) {
+            Integer physicalOrdinal = physicalNameOrdinalMap.get(column.getName());
+            if (physicalOrdinal == null) {
+                // if the column is missing from the file, assign it a column number larger
+                // than the number of columns in the file so the reader will fill it with nulls
+                physicalOrdinal = nextMissingColumnIndex;
+                nextMissingColumnIndex++;
+            }
+            physicalColumns.add(new HiveColumnHandle(column.getName(), column.getHiveType(), column.getTypeSignature(), physicalOrdinal, column.getColumnType(), column.getComment(), column.getRequiredSubfields()));
+        }
+        return physicalColumns.build();
+    }
+
+    private static void verifyFileHasColumnNames(List<String> physicalColumnNames, Path path)
+    {
+        if (!physicalColumnNames.isEmpty() && physicalColumnNames.stream().allMatch(physicalColumnName -> DEFAULT_HIVE_COLUMN_NAME_PATTERN.matcher(physicalColumnName).matches())) {
+            throw new PrestoException(
+                    HIVE_FILE_MISSING_COLUMN_NAMES,
+                    "ORC file does not contain column names in the footer: " + path);
+        }
+    }
+
+    private static Map<String, Integer> buildPhysicalNameOrdinalMap(OrcReader reader)
+    {
+        ImmutableMap.Builder<String, Integer> physicalNameOrdinalMap = ImmutableMap.builder();
+
+        int ordinal = 0;
+        for (String physicalColumnName : reader.getColumnNames()) {
+            physicalNameOrdinalMap.put(physicalColumnName, ordinal);
+            ordinal++;
+        }
+
+        return physicalNameOrdinalMap.build();
     }
 }

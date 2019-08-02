@@ -37,6 +37,7 @@ import com.facebook.presto.spi.ErrorCode;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
+import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.spi.type.BooleanType;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
@@ -84,7 +85,9 @@ import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.airlift.concurrent.MoreFutures.addSuccessCallback;
 import static io.airlift.concurrent.MoreFutures.addTimeout;
 import static java.lang.String.format;
+import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
+import static java.util.UUID.randomUUID;
 
 @ThreadSafe
 class Query
@@ -93,6 +96,7 @@ class Query
 
     private final QueryManager queryManager;
     private final QueryId queryId;
+    private final String slug = "x" + randomUUID().toString().toLowerCase(ENGLISH).replace("-", "");
 
     @GuardedBy("this")
     private final ExchangeClient exchangeClient;
@@ -138,6 +142,9 @@ class Query
 
     @GuardedBy("this")
     private Set<String> resetSessionProperties = ImmutableSet.of();
+
+    @GuardedBy("this")
+    private Map<String, SelectedRole> setRoles = ImmutableMap.of();
 
     @GuardedBy("this")
     private Map<String, String> addedPreparedStatements = ImmutableMap.of();
@@ -238,6 +245,11 @@ class Query
         return queryId;
     }
 
+    public boolean isSlugValid(String slug)
+    {
+        return this.slug.equals(slug);
+    }
+
     public synchronized Optional<String> getSetCatalog()
     {
         return setCatalog;
@@ -261,6 +273,11 @@ class Query
     public synchronized Set<String> getResetSessionProperties()
     {
         return resetSessionProperties;
+    }
+
+    public synchronized Map<String, SelectedRole> getSetRoles()
+    {
+        return setRoles;
     }
 
     public synchronized Map<String, String> getAddedPreparedStatements()
@@ -455,9 +472,13 @@ class Query
             data = ImmutableSet.of(ImmutableList.of(true));
         }
 
-        // only return a next if the query is not done or there is more data to send (due to buffering)
+        // only return a next if
+        // (1) the query is not done AND the query state is not FAILED
+        //   OR
+        // (2)there is more data to send (due to buffering)
         URI nextResultsUri = null;
-        if (!queryInfo.isFinalQueryInfo() || !exchangeClient.isClosed()) {
+        if (!queryInfo.isFinalQueryInfo() && !queryInfo.getState().equals(QueryState.FAILED)
+                || !exchangeClient.isClosed()) {
             nextResultsUri = createNextResultsUri(scheme, uriInfo);
         }
 
@@ -469,6 +490,9 @@ class Query
         // update setSessionProperties
         setSessionProperties = queryInfo.getSetSessionProperties();
         resetSessionProperties = queryInfo.getResetSessionProperties();
+
+        // update setRoles
+        setRoles = queryInfo.getSetRoles();
 
         // update preparedStatements
         addedPreparedStatements = queryInfo.getAddedPreparedStatements();
@@ -535,9 +559,7 @@ class Query
             types = outputInfo.getColumnTypes();
         }
 
-        for (URI outputLocation : outputInfo.getBufferLocations()) {
-            exchangeClient.addLocation(outputLocation);
-        }
+        outputInfo.getBufferLocations().forEach(exchangeClient::addLocation);
         if (outputInfo.isNoMoreBufferLocations()) {
             exchangeClient.noMoreLocations();
         }
@@ -557,6 +579,7 @@ class Query
                 .scheme(scheme)
                 .replacePath("/v1/statement")
                 .path(queryId.toString())
+                .path(slug)
                 .path(String.valueOf(resultId.incrementAndGet()))
                 .replaceQuery("")
                 .build();
@@ -583,6 +606,7 @@ class Query
                 .setProcessedRows(queryStats.getRawInputPositions())
                 .setProcessedBytes(queryStats.getRawInputDataSize().toBytes())
                 .setPeakMemoryBytes(queryStats.getPeakUserMemoryReservation().toBytes())
+                .setSpilledBytes(queryStats.getSpilledDataSize().toBytes())
                 .setRootStage(toStageStats(outputStage))
                 .build();
     }
@@ -728,7 +752,8 @@ class Query
             }
 
             querySubmissionFuture = queryManager.createQuery(queryId, sessionContext, this.query);
-            Futures.addCallback(querySubmissionFuture, new FutureCallback<Object>() {
+            Futures.addCallback(querySubmissionFuture, new FutureCallback<Object>()
+            {
                 @Override
                 public void onSuccess(Object result)
                 {

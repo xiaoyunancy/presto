@@ -14,10 +14,10 @@
 package com.facebook.presto.operator.annotations;
 
 import com.facebook.presto.metadata.BoundVariables;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.spi.InvocationConvention;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.function.Convention;
 import com.facebook.presto.spi.function.FunctionDependency;
+import com.facebook.presto.spi.function.InvocationConvention;
 import com.facebook.presto.spi.function.OperatorDependency;
 import com.facebook.presto.spi.function.TypeParameter;
 import com.facebook.presto.spi.type.TypeManager;
@@ -42,7 +42,7 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 
 public interface ImplementationDependency
 {
-    Object resolve(BoundVariables boundVariables, TypeManager typeManager, FunctionRegistry functionRegistry);
+    Object resolve(BoundVariables boundVariables, TypeManager typeManager, FunctionManager functionManager);
 
     static boolean isImplementationDependencyAnnotation(Annotation annotation)
     {
@@ -106,7 +106,6 @@ public interface ImplementationDependency
                 FunctionDependency functionDependency = (FunctionDependency) annotation;
                 return new FunctionImplementationDependency(
                         functionDependency.name(),
-                        parseTypeSignature(functionDependency.returnType(), literalParameters),
                         Arrays.stream(functionDependency.argumentTypes())
                                 .map(signature -> parseTypeSignature(signature, literalParameters))
                                 .collect(toImmutableList()),
@@ -116,7 +115,6 @@ public interface ImplementationDependency
                 OperatorDependency operatorDependency = (OperatorDependency) annotation;
                 return new OperatorImplementationDependency(
                         operatorDependency.operator(),
-                        parseTypeSignature(operatorDependency.returnType(), literalParameters),
                         Arrays.stream(operatorDependency.argumentTypes())
                                 .map(signature -> parseTypeSignature(signature, literalParameters))
                                 .collect(toImmutableList()),

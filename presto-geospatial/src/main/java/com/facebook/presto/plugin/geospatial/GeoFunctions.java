@@ -26,7 +26,6 @@ import com.esri.core.geometry.OperatorUnion;
 import com.esri.core.geometry.Point;
 import com.esri.core.geometry.Polygon;
 import com.esri.core.geometry.Polyline;
-import com.esri.core.geometry.SpatialReference;
 import com.esri.core.geometry.ogc.OGCConcreteGeometryCollection;
 import com.esri.core.geometry.ogc.OGCGeometry;
 import com.esri.core.geometry.ogc.OGCGeometryCollection;
@@ -67,6 +66,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
 
+import static com.esri.core.geometry.Geometry.Type;
 import static com.esri.core.geometry.NonSimpleResult.Reason.Clustering;
 import static com.esri.core.geometry.NonSimpleResult.Reason.Cracking;
 import static com.esri.core.geometry.NonSimpleResult.Reason.CrossOver;
@@ -88,6 +88,7 @@ import static com.facebook.presto.geospatial.serde.GeometrySerde.deserializeType
 import static com.facebook.presto.geospatial.serde.GeometrySerde.serialize;
 import static com.facebook.presto.plugin.geospatial.GeometryType.GEOMETRY;
 import static com.facebook.presto.plugin.geospatial.GeometryType.GEOMETRY_TYPE_NAME;
+import static com.facebook.presto.plugin.geospatial.SphericalGeographyType.SPHERICAL_GEOGRAPHY_TYPE_NAME;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.spi.type.StandardTypes.BIGINT;
 import static com.facebook.presto.spi.type.StandardTypes.BOOLEAN;
@@ -97,10 +98,12 @@ import static com.facebook.presto.spi.type.StandardTypes.TINYINT;
 import static com.facebook.presto.spi.type.StandardTypes.VARBINARY;
 import static com.facebook.presto.spi.type.StandardTypes.VARCHAR;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.airlift.slice.Slices.wrappedBuffer;
 import static java.lang.Double.isInfinite;
 import static java.lang.Double.isNaN;
+import static java.lang.Math.PI;
 import static java.lang.Math.atan2;
 import static java.lang.Math.cos;
 import static java.lang.Math.sin;
@@ -118,6 +121,7 @@ public final class GeoFunctions
     private static final Slice EMPTY_POLYGON = serialize(new OGCPolygon(new Polygon(), null));
     private static final Slice EMPTY_MULTIPOINT = serialize(createFromEsriGeometry(new MultiPoint(), null, true));
     private static final double EARTH_RADIUS_KM = 6371.01;
+    private static final double EARTH_RADIUS_M = EARTH_RADIUS_KM * 1000.0;
     private static final Map<Reason, String> NON_SIMPLE_REASONS = ImmutableMap.<Reason, String>builder()
             .put(DegenerateSegments, "Degenerate segments")
             .put(Clustering, "Repeated points")
@@ -129,6 +133,14 @@ public final class GeoFunctions
             .build();
     private static final int NUMBER_OF_DIMENSIONS = 3;
     private static final Block EMPTY_ARRAY_OF_INTS = IntegerType.INTEGER.createFixedSizeBlockBuilder(0).build();
+
+    private static final float MIN_LATITUDE = -90;
+    private static final float MAX_LATITUDE = 90;
+    private static final float MIN_LONGITUDE = -180;
+    private static final float MAX_LONGITUDE = 180;
+
+    private static final EnumSet<Type> GEOMETRY_TYPES_FOR_SPHERICAL_GEOGRAPHY = EnumSet.of(
+            Type.Point, Type.Polyline, Type.Polygon, Type.MultiPoint);
 
     private GeoFunctions() {}
 
@@ -147,16 +159,13 @@ public final class GeoFunctions
     @SqlType(GEOMETRY_TYPE_NAME)
     public static Slice stLineString(@SqlType("array(" + GEOMETRY_TYPE_NAME + ")") Block input)
     {
-        // The number of points added to the LineString
-        int addedPoints = 0;
-
         MultiPath multipath = new Polyline();
+        OGCPoint previousPoint = null;
         for (int i = 0; i < input.getPositionCount(); i++) {
             Slice slice = GEOMETRY.getSlice(input, i);
 
-            // Ignore null points
             if (slice.getInput().available() == 0) {
-                continue;
+                throw new PrestoException(INVALID_FUNCTION_ARGUMENT, format("Invalid input to ST_LineString: null point at index %s", i + 1));
             }
 
             OGCGeometry geometry = deserialize(slice);
@@ -165,18 +174,21 @@ public final class GeoFunctions
             }
             OGCPoint point = (OGCPoint) geometry;
 
-            // Empty points are ignored
             if (point.isEmpty()) {
-                continue;
+                throw new PrestoException(INVALID_FUNCTION_ARGUMENT, format("Invalid input to ST_LineString: empty point at index %s", i + 1));
             }
 
-            if (addedPoints == 0) {
+            if (previousPoint == null) {
                 multipath.startPath(point.X(), point.Y());
             }
             else {
+                if (point.Equals(previousPoint)) {
+                    throw new PrestoException(INVALID_FUNCTION_ARGUMENT,
+                            format("Invalid input to ST_LineString: consecutive duplicate points at index %s", i + 1));
+                }
                 multipath.lineTo(point.X(), point.Y());
             }
-            addedPoints++;
+            previousPoint = point;
         }
         OGCLineString linestring = new OGCLineString(multipath, 0, null);
         return serialize(linestring);
@@ -272,6 +284,48 @@ public final class GeoFunctions
         return serialize(geomFromBinary(input));
     }
 
+    @Description("Converts a Geometry object to a SphericalGeography object")
+    @ScalarFunction("to_spherical_geography")
+    @SqlType(SPHERICAL_GEOGRAPHY_TYPE_NAME)
+    public static Slice toSphericalGeography(@SqlType(GEOMETRY_TYPE_NAME) Slice input)
+    {
+        // "every point in input is in range" <=> "the envelope of input is in range"
+        Envelope envelope = deserializeEnvelope(input);
+        if (envelope != null) {
+            checkLatitude(envelope.getYMin());
+            checkLatitude(envelope.getYMax());
+            checkLongitude(envelope.getXMin());
+            checkLongitude(envelope.getXMax());
+        }
+        OGCGeometry geometry = deserialize(input);
+        if (geometry.is3D()) {
+            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Cannot convert 3D geometry to a spherical geography");
+        }
+
+        GeometryCursor cursor = geometry.getEsriGeometryCursor();
+        while (true) {
+            com.esri.core.geometry.Geometry subGeometry = cursor.next();
+            if (subGeometry == null) {
+                break;
+            }
+
+            if (!GEOMETRY_TYPES_FOR_SPHERICAL_GEOGRAPHY.contains(subGeometry.getType())) {
+                throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Cannot convert geometry of this type to spherical geography: " + subGeometry.getType());
+            }
+        }
+
+        return input;
+    }
+
+    @Description("Converts a SphericalGeography object to a Geometry object.")
+    @ScalarFunction("to_geometry")
+    @SqlType(GEOMETRY_TYPE_NAME)
+    public static Slice toGeometry(@SqlType(SPHERICAL_GEOGRAPHY_TYPE_NAME) Slice input)
+    {
+        // Every SphericalGeography object is a valid geometry object
+        return input;
+    }
+
     @Description("Returns the Well-Known Text (WKT) representation of the geometry")
     @ScalarFunction("ST_AsText")
     @SqlType(VARCHAR)
@@ -331,22 +385,30 @@ public final class GeoFunctions
         }
 
         Point centroid;
-        switch (geometryType) {
-            case MULTI_POINT:
-                centroid = computePointsCentroid((MultiVertexGeometry) geometry.getEsriGeometry());
-                break;
-            case LINE_STRING:
-            case MULTI_LINE_STRING:
-                centroid = computeLineCentroid((Polyline) geometry.getEsriGeometry());
-                break;
-            case POLYGON:
-                centroid = computePolygonCentroid((Polygon) geometry.getEsriGeometry());
-                break;
-            case MULTI_POLYGON:
-                centroid = computeMultiPolygonCentroid((OGCMultiPolygon) geometry);
-                break;
-            default:
-                throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Unexpected geometry type: " + geometryType);
+        try {
+            switch (geometryType) {
+                case MULTI_POINT:
+                    centroid = computePointsCentroid((MultiVertexGeometry) geometry.getEsriGeometry());
+                    break;
+                case LINE_STRING:
+                case MULTI_LINE_STRING:
+                    centroid = computeLineCentroid((Polyline) geometry.getEsriGeometry());
+                    break;
+                case POLYGON:
+                    centroid = computePolygonCentroid((Polygon) geometry.getEsriGeometry());
+                    break;
+                case MULTI_POLYGON:
+                    centroid = computeMultiPolygonCentroid((OGCMultiPolygon) geometry);
+                    break;
+                default:
+                    throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Unexpected geometry type: " + geometryType);
+            }
+        }
+        catch (RuntimeException e) {
+            if (e instanceof PrestoException && ((PrestoException) e).getErrorCode() == INVALID_FUNCTION_ARGUMENT.toErrorCode()) {
+                throw e;
+            }
+            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, format("Cannot compute centroid: %s Use ST_IsValid to confirm that input geometry is valid or compute centroid for a bounding box using ST_Envelope.", e.getMessage()), e);
         }
         return serialize(createFromEsriGeometry(centroid, geometry.getEsriSpatialReference()));
     }
@@ -792,15 +854,13 @@ public final class GeoFunctions
             return null;
         }
         MultiPath lines = (MultiPath) geometry.getEsriGeometry();
-        SpatialReference reference = geometry.getEsriSpatialReference();
-        return serialize(createFromEsriGeometry(lines.getPoint(0), reference));
+        return serialize(createFromEsriGeometry(lines.getPoint(0), null));
     }
 
     @Description("Returns a \"simplified\" version of the given geometry")
     @ScalarFunction("simplify_geometry")
     @SqlType(GEOMETRY_TYPE_NAME)
-    public static Slice simplifyGeometry(@SqlType(GEOMETRY_TYPE_NAME) Slice input,
-                                         @SqlType(DOUBLE) double distanceTolerance)
+    public static Slice simplifyGeometry(@SqlType(GEOMETRY_TYPE_NAME) Slice input, @SqlType(DOUBLE) double distanceTolerance)
     {
         if (isNaN(distanceTolerance)) {
             throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "distanceTolerance is NaN");
@@ -829,8 +889,26 @@ public final class GeoFunctions
             return null;
         }
         MultiPath lines = (MultiPath) geometry.getEsriGeometry();
-        SpatialReference reference = geometry.getEsriSpatialReference();
-        return serialize(createFromEsriGeometry(lines.getPoint(lines.getPointCount() - 1), reference));
+        return serialize(createFromEsriGeometry(lines.getPoint(lines.getPointCount() - 1), null));
+    }
+
+    @SqlNullable
+    @Description("Returns an array of points in a linestring")
+    @ScalarFunction("ST_Points")
+    @SqlType("array(" + GEOMETRY_TYPE_NAME + ")")
+    public static Block stPoints(@SqlType(GEOMETRY_TYPE_NAME) Slice input)
+    {
+        OGCGeometry geometry = deserialize(input);
+        validateType("ST_Points", geometry, EnumSet.of(LINE_STRING));
+        if (geometry.isEmpty()) {
+            return null;
+        }
+        MultiPath lines = (MultiPath) geometry.getEsriGeometry();
+        BlockBuilder blockBuilder = GEOMETRY.createBlockBuilder(null, lines.getPointCount());
+        for (int i = 0; i < lines.getPointCount(); i++) {
+            GEOMETRY.writeSlice(blockBuilder, serialize(createFromEsriGeometry(lines.getPoint(i), null)));
+        }
+        return blockBuilder.build();
     }
 
     @SqlNullable
@@ -1230,14 +1308,14 @@ public final class GeoFunctions
 
     private static void checkLatitude(double latitude)
     {
-        if (isNaN(latitude) || isInfinite(latitude) || latitude < -90 || latitude > 90) {
+        if (Double.isNaN(latitude) || Double.isInfinite(latitude) || latitude < MIN_LATITUDE || latitude > MAX_LATITUDE) {
             throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Latitude must be between -90 and 90");
         }
     }
 
     private static void checkLongitude(double longitude)
     {
-        if (isNaN(longitude) || isInfinite(longitude) || longitude < -180 || longitude > 180) {
+        if (Double.isNaN(longitude) || Double.isInfinite(longitude) || longitude < MIN_LONGITUDE || longitude > MAX_LONGITUDE) {
             throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Longitude must be between -180 and 180");
         }
     }
@@ -1410,10 +1488,236 @@ public final class GeoFunctions
         boolean apply(Envelope left, Envelope right);
     }
 
+    @SqlNullable
+    @Description("Returns the great-circle distance in meters between two SphericalGeography points.")
+    @ScalarFunction("ST_Distance")
+    @SqlType(DOUBLE)
+    public static Double stSphericalDistance(@SqlType(SPHERICAL_GEOGRAPHY_TYPE_NAME) Slice left, @SqlType(SPHERICAL_GEOGRAPHY_TYPE_NAME) Slice right)
+    {
+        OGCGeometry leftGeometry = deserialize(left);
+        OGCGeometry rightGeometry = deserialize(right);
+        if (leftGeometry.isEmpty() || rightGeometry.isEmpty()) {
+            return null;
+        }
+
+        // TODO: support more SphericalGeography types.
+        validateSphericalType("ST_Distance", leftGeometry, EnumSet.of(POINT));
+        validateSphericalType("ST_Distance", rightGeometry, EnumSet.of(POINT));
+        Point leftPoint = (Point) leftGeometry.getEsriGeometry();
+        Point rightPoint = (Point) rightGeometry.getEsriGeometry();
+
+        // greatCircleDistance returns distance in KM.
+        return greatCircleDistance(leftPoint.getY(), leftPoint.getX(), rightPoint.getY(), rightPoint.getX()) * 1000;
+    }
+
+    private static void validateSphericalType(String function, OGCGeometry geometry, Set<GeometryType> validTypes)
+    {
+        GeometryType type = GeometryType.getForEsriGeometryType(geometry.geometryType());
+        if (!validTypes.contains(type)) {
+            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, format("When applied to SphericalGeography inputs, %s only supports %s. Input type is: %s", function, OR_JOINER.join(validTypes), type));
+        }
+    }
+
+    @SqlNullable
+    @Description("Returns the area of a geometry on the Earth's surface using spherical model")
+    @ScalarFunction("ST_Area")
+    @SqlType(DOUBLE)
+    public static Double stSphericalArea(@SqlType(SPHERICAL_GEOGRAPHY_TYPE_NAME) Slice input)
+    {
+        OGCGeometry geometry = deserialize(input);
+        if (geometry.isEmpty()) {
+            return null;
+        }
+
+        validateSphericalType("ST_Area", geometry, EnumSet.of(POLYGON, MULTI_POLYGON));
+
+        Polygon polygon = (Polygon) geometry.getEsriGeometry();
+
+        // See https://www.movable-type.co.uk/scripts/latlong.html
+        // and http://osgeo-org.1560.x6.nabble.com/Area-of-a-spherical-polygon-td3841625.html
+        // and https://www.element84.com/blog/determining-if-a-spherical-polygon-contains-a-pole
+        // for the underlying Maths
+
+        double sphericalExcess = 0.0;
+
+        int numPaths = polygon.getPathCount();
+        for (int i = 0; i < numPaths; i++) {
+            double sign = polygon.isExteriorRing(i) ? 1.0 : -1.0;
+            sphericalExcess += sign * Math.abs(computeSphericalExcess(polygon, polygon.getPathStart(i), polygon.getPathEnd(i)));
+        }
+
+        // Math.abs is required here because for Polygons with a 2D area of 0
+        // isExteriorRing returns false for the exterior ring
+        return Math.abs(sphericalExcess * EARTH_RADIUS_M * EARTH_RADIUS_M);
+    }
+
+    @SqlNullable
+    @Description("Returns the great-circle length in meters of a linestring or multi-linestring on Earth's surface")
+    @ScalarFunction("ST_Length")
+    @SqlType(DOUBLE)
+    public static Double stSphericalLength(@SqlType(SPHERICAL_GEOGRAPHY_TYPE_NAME) Slice input)
+    {
+        OGCGeometry geometry = deserialize(input);
+        if (geometry.isEmpty()) {
+            return null;
+        }
+
+        validateSphericalType("ST_Length", geometry, EnumSet.of(LINE_STRING, MULTI_LINE_STRING));
+        MultiPath lineString = (MultiPath) geometry.getEsriGeometry();
+
+        double sum = 0;
+
+        // sum up paths on (multi)linestring
+        for (int path = 0; path < lineString.getPathCount(); path++) {
+            if (lineString.getPathSize(path) < 2) {
+                continue;
+            }
+
+            // sum up distances between adjacent points on this path
+            int pathStart = lineString.getPathStart(path);
+            Point prev = lineString.getPoint(pathStart);
+            for (int i = pathStart + 1; i < lineString.getPathEnd(path); i++) {
+                Point next = lineString.getPoint(i);
+                sum += greatCircleDistance(prev.getY(), prev.getX(), next.getY(), next.getX());
+                prev = next;
+            }
+        }
+
+        return sum * 1000;
+    }
+
+    private static double computeSphericalExcess(Polygon polygon, int start, int end)
+    {
+        // Our calculations rely on not processing the same point twice
+        if (polygon.getPoint(end - 1).equals(polygon.getPoint(start))) {
+            end = end - 1;
+        }
+
+        if (end - start < 3) {
+            // A path with less than 3 distinct points is not valid for calculating an area
+            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Polygon is not valid: a loop contains less then 3 vertices.");
+        }
+
+        Point point = new Point();
+
+        // Initialize the calculator with the last point
+        polygon.getPoint(end - 1, point);
+        SphericalExcessCalculator calculator = new SphericalExcessCalculator(point);
+
+        for (int i = start; i < end; i++) {
+            polygon.getPoint(i, point);
+            calculator.add(point);
+        }
+
+        return calculator.computeSphericalExcess();
+    }
+
+    private static class SphericalExcessCalculator
+    {
+        private static final double TWO_PI = 2 * Math.PI;
+        private static final double THREE_PI = 3 * Math.PI;
+
+        private double sphericalExcess;
+        private double courseDelta;
+
+        private boolean firstPoint;
+        private double firstInitialBearing;
+        private double previousFinalBearing;
+
+        private double previousPhi;
+        private double previousCos;
+        private double previousSin;
+        private double previousTan;
+        private double previousLongitude;
+
+        private boolean done;
+
+        public SphericalExcessCalculator(Point endPoint)
+        {
+            previousPhi = toRadians(endPoint.getY());
+            previousSin = Math.sin(previousPhi);
+            previousCos = Math.cos(previousPhi);
+            previousTan = Math.tan(previousPhi / 2);
+            previousLongitude = toRadians(endPoint.getX());
+            firstPoint = true;
+        }
+
+        private void add(Point point) throws IllegalStateException
+        {
+            checkState(!done, "Computation of spherical excess is complete");
+
+            double phi = toRadians(point.getY());
+            double tan = Math.tan(phi / 2);
+            double longitude = toRadians(point.getX());
+
+            // We need to check for that specifically
+            // Otherwise calculating the bearing is not deterministic
+            if (longitude == previousLongitude && phi == previousPhi) {
+                throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Polygon is not valid: it has two identical consecutive vertices");
+            }
+
+            double deltaLongitude = longitude - previousLongitude;
+            sphericalExcess += 2 * Math.atan2(Math.tan(deltaLongitude / 2) * (previousTan + tan), 1 + previousTan * tan);
+
+            double cos = Math.cos(phi);
+            double sin = Math.sin(phi);
+            double sinOfDeltaLongitude = Math.sin(deltaLongitude);
+            double cosOfDeltaLongitude = Math.cos(deltaLongitude);
+
+            // Initial bearing from previous to current
+            double y = sinOfDeltaLongitude * cos;
+            double x = previousCos * sin - previousSin * cos * cosOfDeltaLongitude;
+            double initialBearing = (Math.atan2(y, x) + TWO_PI) % TWO_PI;
+
+            // Final bearing from previous to current = opposite of bearing from current to previous
+            double finalY = -sinOfDeltaLongitude * previousCos;
+            double finalX = previousSin * cos - previousCos * sin * cosOfDeltaLongitude;
+            double finalBearing = (Math.atan2(finalY, finalX) + PI) % TWO_PI;
+
+            // When processing our first point we don't yet have a previousFinalBearing
+            if (firstPoint) {
+                // So keep our initial bearing around, and we'll use it at the end
+                // with the last final bearing
+                firstInitialBearing = initialBearing;
+                firstPoint = false;
+            }
+            else {
+                courseDelta += (initialBearing - previousFinalBearing + THREE_PI) % TWO_PI - PI;
+            }
+
+            courseDelta += (finalBearing - initialBearing + THREE_PI) % TWO_PI - PI;
+
+            previousFinalBearing = finalBearing;
+            previousCos = cos;
+            previousSin = sin;
+            previousPhi = phi;
+            previousTan = tan;
+            previousLongitude = longitude;
+        }
+
+        public double computeSphericalExcess()
+        {
+            if (!done) {
+                // Now that we have our last final bearing, we can calculate the remaining course delta
+                courseDelta += (firstInitialBearing - previousFinalBearing + THREE_PI) % TWO_PI - PI;
+
+                // The courseDelta should be 2Pi or - 2Pi, unless a pole is enclosed (and then it should be ~ 0)
+                // In which case we need to correct the spherical excess by 2Pi
+                if (Math.abs(courseDelta) < PI / 4) {
+                    sphericalExcess = Math.abs(sphericalExcess) - TWO_PI;
+                }
+                done = true;
+            }
+
+            return sphericalExcess;
+        }
+    }
+
     private static Iterable<Slice> getGeometrySlicesFromBlock(Block block)
     {
         requireNonNull(block, "block is null");
-        return () -> new Iterator<Slice>() {
+        return () -> new Iterator<Slice>()
+        {
             private int iteratorPosition;
 
             @Override

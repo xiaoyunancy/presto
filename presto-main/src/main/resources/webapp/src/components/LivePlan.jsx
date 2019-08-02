@@ -11,33 +11,41 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+//@flow
 
 import React from "react";
-import ReactDOM from "react-dom";
 import ReactDOMServer from "react-dom/server";
+import * as dagreD3 from "dagre-d3";
+import * as d3 from "d3";
 
 import {
-    computeSources,
-    formatCount,
-    getFirstParameter,
+    formatRows,
     getStageStateColor,
     initializeGraph,
-    initializeSvg
+    initializeSvg,
+    truncateString
 } from "../utils";
-import {StageDetail} from "./StageDetail";
 import {QueryHeader} from "./QueryHeader";
 
-class StageStatistics extends React.Component {
-    static flatten(queryInfo) {
-        const stages = new Map();
-        StageStatistics.flattenStage(queryInfo.outputStage, stages);
+type StageStatisticsProps = {
+    stage: any,
+}
+type StageStatisticsState = {}
+type StageNodeInfo = {
+    stageId: string,
+    id: string,
+    root: string,
+    distribution: any,
+    stageStats: any,
+    state: string,
+    nodes: Map<string, any>,
+}
 
-        return {
-            id: queryInfo.queryId,
-            root: queryInfo.outputStage.plan.id,
-            stageStats: {},
-            stages: stages
-        }
+class StageStatistics extends React.Component<StageStatisticsProps, StageStatisticsState> {
+    static getStages(queryInfo): Map<string, StageNodeInfo> {
+        const stages: Map<string, StageNodeInfo> = new Map();
+        StageStatistics.flattenStage(queryInfo.outputStage, stages);
+        return stages;
     }
 
     static flattenStage(stageInfo, result) {
@@ -46,7 +54,7 @@ class StageStatistics extends React.Component {
         });
 
         const nodes = new Map();
-        StageStatistics.flattenNode(result, stageInfo.plan.root, nodes);
+        StageStatistics.flattenNode(result, stageInfo.plan.root, JSON.parse(stageInfo.plan.jsonRepresentation), nodes);
 
         result.set(stageInfo.plan.id, {
             stageId: stageInfo.stageId,
@@ -59,21 +67,18 @@ class StageStatistics extends React.Component {
         });
     }
 
-    static flattenNode(stages, nodeInfo, result) {
-        const allSources = computeSources(nodeInfo);
-        const sources = allSources[0];
-        const remoteSources = allSources[1];
-
-        result.set(nodeInfo.id, {
-            id: nodeInfo.id,
-            type: nodeInfo['@type'],
-            sources: sources.map(function (node) { return node.id }),
-            remoteSources: remoteSources,
-            stats: {}
+    static flattenNode(stages, rootNodeInfo, node: any, result: Map<any, PlanNodeProps>) {
+        result.set(node.id, {
+            id: node.id,
+            name: node['name'],
+            identifier: node['identifier'],
+            details: node['details'],
+            sources: node.children.map(node => node.id),
+            remoteSources: node.remoteSources,
         });
 
-        sources.forEach(function (child) {
-            StageStatistics.flattenNode(stages, child, result);
+        node.children.forEach(function (child) {
+            StageStatistics.flattenNode(stages, rootNodeInfo, child, result);
         });
     }
 
@@ -83,13 +88,11 @@ class StageStatistics extends React.Component {
         return (
             <div>
                 <div>
-                    Output: {stats.outputDataSize + " / " + formatCount(stats.outputPositions) + " rows"}
-                    <br/>
-                    Buffered: {stats.bufferedDataSize}
-                    <hr/>
+                    <h3 className="margin-top: 0">Stage {stage.id}</h3>
                     {stage.state}
                     <hr/>
-                    CPU: {stats.totalCpuTime}
+                    CPU: {stats.totalCpuTime}<br />
+                    Buffered: {stats.bufferedDataSize}<br />
                     {stats.fullyBlocked ?
                         <div style={{color: '#ff0000'}}>Blocked: {stats.totalBlockedTime} </div> :
                         <div>Blocked: {stats.totalBlockedTime} </div>
@@ -97,71 +100,120 @@ class StageStatistics extends React.Component {
                     Memory: {stats.userMemoryReservation}
                     <br/>
                     Splits: {"Q:" + stats.queuedDrivers + ", R:" + stats.runningDrivers + ", F:" + stats.completedDrivers}
+                    <br/>
+                    Lifespans: {stats.completedLifespans + " / " + stats.totalLifespans}
                     <hr/>
-                    Input: {stats.rawInputDataSize + " / " + formatCount(stats.rawInputPositions)} rows
+                    Input: {stats.rawInputDataSize + " / " + formatRows(stats.rawInputPositions)}
                 </div>
             </div>
         );
     }
 }
 
-export class LivePlan extends React.Component {
-    constructor(props) {
+type PlanNodeProps = {
+    id: string,
+    name: string,
+    identifier: string,
+    details: string,
+    sources: string[],
+    remoteSources: string[],
+}
+type PlanNodeState = {}
+
+class PlanNode extends React.Component<PlanNodeProps, PlanNodeState> {
+    constructor(props: PlanNodeProps) {
+        super(props);
+    }
+
+    render() {
+        return (
+            <div style={{color: "#000"}} data-toggle="tooltip" data-placement="bottom" data-container="body" data-html="true"
+                 title={"<h4>" + this.props.name + "</h4>" + this.props.identifier}>
+                <strong>{this.props.name}</strong>
+                <div>
+                    {truncateString(this.props.identifier, 35)}
+                </div>
+            </div>
+        );
+    }
+}
+
+type LivePlanProps = {
+    queryId: string,
+    isEmbedded: boolean,
+}
+
+type LivePlanState = {
+    initialized: boolean,
+    ended: boolean,
+
+    query: ?any,
+
+    graph: any,
+    svg: any,
+    render: any,
+}
+
+export class LivePlan extends React.Component<LivePlanProps, LivePlanState> {
+    timeoutId: TimeoutID;
+
+    constructor(props: LivePlanProps) {
         super(props);
         this.state = {
             initialized: false,
             ended: false,
 
+            query: null,
+
             graph: initializeGraph(),
-            svg: initializeSvg("#plan-canvas"),
+            svg: null,
             render: new dagreD3.render(),
         };
-
-        this.refreshLoop = this.refreshLoop.bind(this);
     }
 
     resetTimer() {
         clearTimeout(this.timeoutId);
         // stop refreshing when query finishes or fails
         if (this.state.query === null || !this.state.ended) {
-            this.timeoutId = setTimeout(this.refreshLoop, 1000);
+            this.timeoutId = setTimeout(this.refreshLoop.bind(this), 1000);
         }
     }
 
     refreshLoop() {
         clearTimeout(this.timeoutId); // to stop multiple series of refreshLoop from going on simultaneously
-        const queryId = getFirstParameter(window.location.search);
-        $.get('/v1/query/' + queryId, function (query) {
-            this.setState({
-                query: query,
+        fetch('/v1/query/' + this.props.queryId)
+            .then(response => response.json())
+            .then(query => {
+                this.setState({
+                    query: query,
 
-                initialized: true,
-                ended: query.finalQueryInfo,
-            });
-            this.resetTimer();
-        }.bind(this))
-            .error(function () {
+                    initialized: true,
+                    ended: query.finalQueryInfo,
+                });
+                this.resetTimer();
+            })
+            .catch(() => {
                 this.setState({
                     initialized: true,
                 });
                 this.resetTimer();
-            }.bind(this));
+            });
     }
 
-    static handleStageClick(stageCssId) {
+    static handleStageClick(stageCssId: string) {
         window.open("stage.html?" + stageCssId, '_blank');
     }
 
     componentDidMount() {
-        this.refreshLoop();
+        this.refreshLoop.bind(this)();
     }
 
-    updateD3Stage(stage, graph) {
+    updateD3Stage(stage: StageNodeInfo, graph: any, allStages: Map<string, StageNodeInfo>) {
         const clusterId = stage.stageId;
         const stageRootNodeId = "stage-" + stage.id + "-root";
         const color = getStageStateColor(stage);
 
-        graph.setNode(clusterId, {label: "Stage " + stage.id + " ", clusterLabelPos: 'top-right', style: 'fill: ' + color, labelStyle: 'fill: #fff'});
+        graph.setNode(clusterId, {style: 'fill: ' + color, labelStyle: 'fill: #fff'});
 
         // this is a non-standard use of ReactDOMServer, but it's the cleanest way to unify DagreD3 with React
         const html = ReactDOMServer.renderToString(<StageStatistics key={stage.id} stage={stage}/>);
@@ -172,60 +224,87 @@ export class LivePlan extends React.Component {
 
         stage.nodes.forEach(node => {
             const nodeId = "node-" + node.id;
+            const nodeHtml = ReactDOMServer.renderToString(<PlanNode {...node}/>);
 
-            graph.setNode(nodeId, {label: node.type, style: 'fill: #fff'});
+            graph.setNode(nodeId, {label: nodeHtml, style: 'fill: #fff', labelType: "html"});
             graph.setParent(nodeId, clusterId);
 
             node.sources.forEach(source => {
-                graph.setEdge("node-" + source, nodeId, {arrowheadStyle: "fill: #fff; stroke-width: 0;"});
+                graph.setEdge("node-" + source, nodeId, {class: "plan-edge", arrowheadClass: "plan-arrowhead"});
             });
 
-            if (node.type === 'remoteSource') {
+            if (node.remoteSources.length > 0) {
                 graph.setNode(nodeId, {label: '', shape: "circle"});
 
                 node.remoteSources.forEach(sourceId => {
-                    graph.setEdge("stage-" + sourceId + "-root", nodeId, {style: "stroke-width: 5px;", arrowheadStyle: "fill: #fff; stroke-width: 0;"});
+                    const source = allStages.get(sourceId);
+                    if (source) {
+                        const sourceStats = source.stageStats;
+                        graph.setEdge("stage-" + sourceId + "-root", nodeId, {
+                                class: "plan-edge",
+                                style: "stroke-width: 4px",
+                                arrowheadClass: "plan-arrowhead",
+                                label: sourceStats.outputDataSize + " / " + formatRows(sourceStats.outputPositions),
+                                labelStyle: "color: #fff; font-weight: bold; font-size: 24px;",
+                                labelType: "html",
+                        });
+                    }
                 });
             }
         });
     }
 
     updateD3Graph() {
+        if (!this.state.svg) {
+            this.setState({
+                svg: initializeSvg("#plan-canvas"),
+            });
+            return;
+        }
+
         if (!this.state.query) {
             return;
         }
 
         const graph = this.state.graph;
-        const stages = StageStatistics.flatten(this.state.query).stages;
+        const stages = StageStatistics.getStages(this.state.query);
         stages.forEach(stage => {
-            this.updateD3Stage(stage, graph);
+            this.updateD3Stage(stage, graph, stages);
         });
 
-        this.state.render(d3.select("#plan-canvas g"), graph);
+        const inner = d3.select("#plan-canvas g");
+        this.state.render(inner, graph);
 
         const svg = this.state.svg;
         svg.selectAll("g.cluster").on("click", LivePlan.handleStageClick);
-        svg.attr("height", graph.graph().height);
-        svg.attr("width", graph.graph().width);
+
+        const width = parseInt(window.getComputedStyle(document.getElementById("live-plan"), null).getPropertyValue("width").replace(/px/, "")) - 50;
+        const height = parseInt(window.getComputedStyle(document.getElementById("live-plan"), null).getPropertyValue("height").replace(/px/, "")) - 50;
+
+        const graphHeight = graph.graph().height + 100;
+        const graphWidth = graph.graph().width + 100;
+        if (this.state.ended) {
+            // Zoom doesn't deal well with DOM changes
+            const initialScale = Math.min(width / graphWidth, height / graphHeight);
+            const zoom = d3.zoom().scaleExtent([initialScale, 1]).on("zoom", function () {
+                inner.attr("transform", d3.event.transform);
+            });
+
+            svg.call(zoom);
+            svg.call(zoom.transform, d3.zoomIdentity.translate((width - graph.graph().width * initialScale) / 2, 20).scale(initialScale));
+            svg.attr('height', height);
+            svg.attr('width', width);
+        }
+        else {
+            svg.attr('height', graphHeight);
+            svg.attr('width', graphWidth);
+        }
     }
 
-    findStage(stageId, currentStage) {
-        if (stageId === -1) {
-            return null;
-        }
-
-        if (parseInt(currentStage.plan.id) === stageId) {
-            return currentStage;
-        }
-
-        for (let i = 0; i < currentStage.subStages.length; i++) {
-            const stage = this.findStage(stageId, currentStage.subStages[i]);
-            if (stage !== null) {
-                return stage;
-            }
-        }
-
-        return null;
+    componentDidUpdate() {
+        this.updateD3Graph();
+        //$FlowFixMe
+        $('[data-toggle="tooltip"]').tooltip()
     }
 
     render() {
@@ -243,9 +322,9 @@ export class LivePlan extends React.Component {
             );
         }
 
-        let livePlanGraph = null;
-        if (!this.state.query.outputStage) {
-            livePlanGraph = (
+        let loadingMessage = null;
+        if (query && !query.outputStage) {
+            loadingMessage = (
                 <div className="row error-message">
                     <div className="col-xs-12">
                         <h4>Live plan graph will appear automatically when query starts running.</h4>
@@ -254,23 +333,21 @@ export class LivePlan extends React.Component {
                 </div>
             )
         }
-        else {
-            this.updateD3Graph();
-            const selectedStage = this.findStage(this.state.selectedStageId, this.state.query.outputStage);
-            if (selectedStage) {
-                ReactDOM.render(
-                    <StageDetail key={0} stage={selectedStage}/>,
-                    document.getElementById('stage-performance')
-                );
-            }
-        }
 
+        // TODO: Refactor components to move refreshLoop to parent rather than using this property
+        const queryHeader = this.props.isEmbedded ? null : <QueryHeader query={query}/>;
         return (
             <div>
-                <QueryHeader query={query}/>
+                {queryHeader}
                 <div className="row">
                     <div className="col-xs-12">
-                        {livePlanGraph}
+                        {loadingMessage}
+                        <div id="live-plan" className="graph-container">
+                            <div className="pull-right">
+                                {this.state.ended ? "Scroll to zoom." : "Zoom disabled while query is running." } Click stage to view additional statistics
+                            </div>
+                            <svg id="plan-canvas"/>
+                        </div>
                     </div>
                 </div>
             </div>

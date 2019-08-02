@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.analyzer.FieldId;
 import com.facebook.presto.sql.analyzer.RelationId;
 import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
@@ -23,6 +24,7 @@ import com.facebook.presto.sql.tree.GroupingOperation;
 import com.facebook.presto.sql.tree.LongLiteral;
 import com.facebook.presto.sql.tree.NodeRef;
 import com.facebook.presto.sql.tree.SubscriptExpression;
+import com.facebook.presto.sql.tree.SymbolReference;
 
 import java.util.List;
 import java.util.Map;
@@ -38,9 +40,9 @@ public final class GroupingOperationRewriter
 {
     private GroupingOperationRewriter() {}
 
-    public static Expression rewriteGroupingOperation(GroupingOperation expression, List<Set<Integer>> groupingSets, Map<NodeRef<Expression>, FieldId> columnReferenceFields, Optional<Symbol> groupIdSymbol)
+    public static Expression rewriteGroupingOperation(GroupingOperation expression, List<Set<Integer>> groupingSets, Map<NodeRef<Expression>, FieldId> columnReferenceFields, Optional<VariableReferenceExpression> groupIdVariable)
     {
-        requireNonNull(groupIdSymbol, "groupIdSymbol is null");
+        requireNonNull(groupIdVariable, "groupIdVariable is null");
 
         // No GroupIdNode and a GROUPING() operation imply a single grouping, which
         // means that any columns specified as arguments to GROUPING() will be included
@@ -51,7 +53,7 @@ public final class GroupingOperationRewriter
             return new LongLiteral("0");
         }
         else {
-            checkState(groupIdSymbol.isPresent(), "groupId symbol is missing");
+            checkState(groupIdVariable.isPresent(), "groupId symbol is missing");
 
             RelationId relationId = columnReferenceFields.get(NodeRef.of(expression.getGroupingColumns().get(0))).getRelationId();
 
@@ -70,7 +72,7 @@ public final class GroupingOperationRewriter
             // It is necessary to add a 1 to the groupId because the underlying array is indexed starting at 1
             return new SubscriptExpression(
                     new ArrayConstructor(groupingResults),
-                    new ArithmeticBinaryExpression(ADD, groupIdSymbol.get().toSymbolReference(), new GenericLiteral("BIGINT", "1")));
+                    new ArithmeticBinaryExpression(ADD, new SymbolReference(groupIdVariable.get().getName()), new GenericLiteral("BIGINT", "1")));
         }
     }
 
@@ -96,14 +98,13 @@ public final class GroupingOperationRewriter
      * grouping and 1 otherwise. For an example, see the SQL documentation for the
      * function.
      *
-     * @param columns The column arguments with which the function was
-     *        invoked converted to ordinals with respect to the base table column
-     *        ordering.
+     * @param columns The column arguments with which the function was invoked
+     * converted to ordinals with respect to the base table column ordering.
      * @param groupingSet A collection containing the ordinals of the
-     *        columns present in the grouping.
+     * columns present in the grouping.
      * @return A bit set converted to decimal indicating which columns are present in
-     *         the grouping. If a column is NOT present in the grouping its corresponding
-     *         bit is set to 1 and to 0 if the column is present in the grouping.
+     * the grouping. If a column is NOT present in the grouping its corresponding
+     * bit is set to 1 and to 0 if the column is present in the grouping.
      */
     static long calculateGrouping(Set<Integer> groupingSet, List<Integer> columns)
     {

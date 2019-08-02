@@ -29,6 +29,7 @@ import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionTy
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.PARTITIONED;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.ELIMINATE_CROSS_JOINS;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.NONE;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.PartialMergePushdownStrategy.PUSH_THROUGH_LOW_MEMORY_OPERATORS;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.SPILLER_SPILL_PATH;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.SPILL_ENABLED;
 import static com.facebook.presto.sql.analyzer.RegexLibrary.JONI;
@@ -38,7 +39,6 @@ import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDe
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
-import static io.airlift.units.DataSize.succinctBytes;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -55,11 +55,16 @@ public class TestFeaturesConfig
                 .setJoinDistributionType(PARTITIONED)
                 .setJoinMaxBroadcastTableSize(null)
                 .setGroupedExecutionForAggregationEnabled(false)
+                .setGroupedExecutionForEligibleTableScansEnabled(false)
+                .setDynamicScheduleForGroupedExecutionEnabled(false)
+                .setRecoverableGroupedExecutionEnabled(false)
+                .setMaxFailedTaskPercentage(0.3)
                 .setConcurrentLifespansPerTask(0)
                 .setFastInequalityJoins(true)
                 .setColocatedJoinsEnabled(false)
                 .setSpatialJoinsEnabled(true)
                 .setJoinReorderingStrategy(ELIMINATE_CROSS_JOINS)
+                .setPartialMergePushdownStrategy(FeaturesConfig.PartialMergePushdownStrategy.NONE)
                 .setMaxReorderedJoins(9)
                 .setRedistributeWrites(true)
                 .setScaleWriters(false)
@@ -86,6 +91,9 @@ public class TestFeaturesConfig
                 .setIterativeOptimizerEnabled(true)
                 .setIterativeOptimizerTimeout(new Duration(3, MINUTES))
                 .setEnableStatsCalculator(true)
+                .setIgnoreStatsCalculatorFailures(true)
+                .setPrintStatsForNonJoinQuery(false)
+                .setDefaultFilterFactorEnabled(false)
                 .setExchangeCompressionEnabled(false)
                 .setLegacyTimestamp(true)
                 .setLegacyRowFieldOrdinalAccess(false)
@@ -99,13 +107,17 @@ public class TestFeaturesConfig
                 .setFilterAndProjectMinOutputPageRowCount(256)
                 .setUseMarkDistinct(true)
                 .setPreferPartialAggregation(true)
+                .setOptimizeTopNRowNumber(true)
                 .setHistogramGroupImplementation(HistogramGroupImplementation.NEW)
                 .setArrayAggGroupImplementation(ArrayAggGroupImplementation.NEW)
                 .setMultimapAggGroupImplementation(MultimapAggGroupImplementation.NEW)
                 .setDistributedSortEnabled(true)
                 .setMaxGroupingSets(2048)
                 .setLegacyUnnestArrayRows(false)
-                .setPreAllocateMemoryThreshold(succinctBytes(0)));
+                .setJsonSerdeCodeGenerationEnabled(false)
+                .setPushLimitThroughOuterJoin(true)
+                .setMaxConcurrentMaterializations(10)
+                .setPushdownSubfieldsEnabled(false));
     }
 
     @Test
@@ -118,6 +130,9 @@ public class TestFeaturesConfig
                 .put("experimental.iterative-optimizer-enabled", "false")
                 .put("experimental.iterative-optimizer-timeout", "10s")
                 .put("experimental.enable-stats-calculator", "false")
+                .put("optimizer.ignore-stats-calculator-failures", "false")
+                .put("print-stats-for-non-join-query", "true")
+                .put("optimizer.default-filter-factor-enabled", "true")
                 .put("deprecated.legacy-array-agg", "true")
                 .put("deprecated.legacy-log-function", "true")
                 .put("deprecated.group-by-uses-equal", "true")
@@ -128,11 +143,16 @@ public class TestFeaturesConfig
                 .put("join-distribution-type", "BROADCAST")
                 .put("join-max-broadcast-table-size", "42GB")
                 .put("grouped-execution-for-aggregation-enabled", "true")
+                .put("experimental.grouped-execution-for-eligible-table-scans-enabled", "true")
+                .put("dynamic-schedule-for-grouped-execution", "true")
+                .put("recoverable-grouped-execution-enabled", "true")
+                .put("max-failed-task-percentage", "0.8")
                 .put("concurrent-lifespans-per-task", "1")
                 .put("fast-inequality-joins", "false")
                 .put("colocated-joins-enabled", "true")
                 .put("spatial-joins-enabled", "false")
                 .put("optimizer.join-reordering-strategy", "NONE")
+                .put("experimental.optimizer.partial-merge-pushdown-strategy", PUSH_THROUGH_LOW_MEMORY_OPERATORS.name())
                 .put("optimizer.max-reordered-joins", "5")
                 .put("redistribute-writes", "false")
                 .put("scale-writers", "true")
@@ -166,10 +186,14 @@ public class TestFeaturesConfig
                 .put("multimapagg.implementation", "LEGACY")
                 .put("optimizer.use-mark-distinct", "false")
                 .put("optimizer.prefer-partial-aggregation", "false")
+                .put("optimizer.optimize-top-n-row-number", "false")
                 .put("distributed-sort", "false")
                 .put("analyzer.max-grouping-sets", "2047")
                 .put("deprecated.legacy-unnest-array-rows", "true")
-                .put("experimental.preallocate-memory-threshold", "5TB")
+                .put("experimental.json-serde-codegen-enabled", "true")
+                .put("optimizer.push-limit-through-outer-join", "false")
+                .put("max-concurrent-materializations", "5")
+                .put("experimental.pushdown-subfields-enabled", "true")
                 .build();
 
         FeaturesConfig expected = new FeaturesConfig()
@@ -179,15 +203,22 @@ public class TestFeaturesConfig
                 .setIterativeOptimizerEnabled(false)
                 .setIterativeOptimizerTimeout(new Duration(10, SECONDS))
                 .setEnableStatsCalculator(false)
+                .setIgnoreStatsCalculatorFailures(false)
+                .setPrintStatsForNonJoinQuery(true)
                 .setDistributedIndexJoinsEnabled(true)
                 .setJoinDistributionType(BROADCAST)
                 .setJoinMaxBroadcastTableSize(new DataSize(42, GIGABYTE))
                 .setGroupedExecutionForAggregationEnabled(true)
+                .setGroupedExecutionForEligibleTableScansEnabled(true)
+                .setDynamicScheduleForGroupedExecutionEnabled(true)
+                .setRecoverableGroupedExecutionEnabled(true)
+                .setMaxFailedTaskPercentage(0.8)
                 .setConcurrentLifespansPerTask(1)
                 .setFastInequalityJoins(false)
                 .setColocatedJoinsEnabled(true)
                 .setSpatialJoinsEnabled(false)
                 .setJoinReorderingStrategy(NONE)
+                .setPartialMergePushdownStrategy(PUSH_THROUGH_LOW_MEMORY_OPERATORS)
                 .setMaxReorderedJoins(5)
                 .setRedistributeWrites(false)
                 .setScaleWriters(true)
@@ -224,13 +255,18 @@ public class TestFeaturesConfig
                 .setFilterAndProjectMinOutputPageRowCount(2048)
                 .setUseMarkDistinct(false)
                 .setPreferPartialAggregation(false)
+                .setOptimizeTopNRowNumber(false)
                 .setHistogramGroupImplementation(HistogramGroupImplementation.LEGACY)
                 .setArrayAggGroupImplementation(ArrayAggGroupImplementation.LEGACY)
                 .setMultimapAggGroupImplementation(MultimapAggGroupImplementation.LEGACY)
                 .setDistributedSortEnabled(false)
                 .setMaxGroupingSets(2047)
                 .setLegacyUnnestArrayRows(true)
-                .setPreAllocateMemoryThreshold(DataSize.valueOf("5TB"));
+                .setDefaultFilterFactorEnabled(true)
+                .setJsonSerdeCodeGenerationEnabled(true)
+                .setPushLimitThroughOuterJoin(false)
+                .setMaxConcurrentMaterializations(5)
+                .setPushdownSubfieldsEnabled(true);
         assertFullMapping(properties, expected);
     }
 

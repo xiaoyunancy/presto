@@ -17,9 +17,9 @@ import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.operator.JoinProbe.JoinProbeFactory;
 import com.facebook.presto.operator.LookupJoinOperators.JoinType;
 import com.facebook.presto.operator.LookupOuterOperator.LookupOuterOperatorFactory;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spiller.PartitioningSpillerFactory;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
@@ -43,7 +43,7 @@ public class LookupJoinOperatorFactory
     private final JoinType joinType;
     private final JoinProbeFactory joinProbeFactory;
     private final Optional<OuterOperatorFactoryResult> outerOperatorFactoryResult;
-    private final JoinBridgeManager<LookupSourceFactory> joinBridgeManager;
+    private final JoinBridgeManager<? extends LookupSourceFactory> joinBridgeManager;
     private final OptionalInt totalOperatorsCount;
     private final HashGenerator probeHashGenerator;
     private final PartitioningSpillerFactory partitioningSpillerFactory;
@@ -53,7 +53,7 @@ public class LookupJoinOperatorFactory
     public LookupJoinOperatorFactory(
             int operatorId,
             PlanNodeId planNodeId,
-            JoinBridgeManager<LookupSourceFactory> lookupSourceFactoryManager,
+            JoinBridgeManager<? extends LookupSourceFactory> lookupSourceFactoryManager,
             List<Type> probeTypes,
             List<Type> probeOutputTypes,
             List<Type> buildOutputTypes,

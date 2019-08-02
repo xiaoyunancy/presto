@@ -13,10 +13,10 @@
  */
 package com.facebook.presto.transaction;
 
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.metadata.Catalog;
 import com.facebook.presto.metadata.CatalogManager;
 import com.facebook.presto.metadata.CatalogMetadata;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.connector.Connector;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
@@ -249,7 +249,7 @@ public class InMemoryTransactionManager
     @Override
     public void trySetInactive(TransactionId transactionId)
     {
-        tryGetTransactionMetadata(transactionId).ifPresent(TransactionMetadata::setInActive);
+        tryGetTransactionMetadata(transactionId).ifPresent(TransactionMetadata::setInactive);
     }
 
     private TransactionMetadata getTransactionMetadata(TransactionId transactionId)
@@ -344,7 +344,7 @@ public class InMemoryTransactionManager
             idleStartTime.set(null);
         }
 
-        public void setInActive()
+        public void setInactive()
         {
             idleStartTime.set(System.nanoTime());
         }
@@ -412,15 +412,23 @@ public class InMemoryTransactionManager
             if (catalogMetadata == null) {
                 Catalog catalog = catalogsByConnectorId.get(connectorId);
                 verify(catalog != null, "Unknown connectorId: %s", connectorId);
+                Connector connector = catalog.getConnector(connectorId);
 
                 ConnectorTransactionMetadata metadata = createConnectorTransactionMetadata(catalog.getConnectorId(), catalog);
                 ConnectorTransactionMetadata informationSchema = createConnectorTransactionMetadata(catalog.getInformationSchemaId(), catalog);
                 ConnectorTransactionMetadata systemTables = createConnectorTransactionMetadata(catalog.getSystemTablesId(), catalog);
 
                 catalogMetadata = new CatalogMetadata(
-                        metadata.getConnectorId(), metadata.getConnectorMetadata(), metadata.getTransactionHandle(),
-                        informationSchema.getConnectorId(), informationSchema.getConnectorMetadata(), informationSchema.getTransactionHandle(),
-                        systemTables.getConnectorId(), systemTables.getConnectorMetadata(), systemTables.getTransactionHandle());
+                        metadata.getConnectorId(),
+                        metadata.getConnectorMetadata(),
+                        metadata.getTransactionHandle(),
+                        informationSchema.getConnectorId(),
+                        informationSchema.getConnectorMetadata(),
+                        informationSchema.getTransactionHandle(),
+                        systemTables.getConnectorId(),
+                        systemTables.getConnectorMetadata(),
+                        systemTables.getTransactionHandle(),
+                        connector.getCapabilities());
 
                 this.catalogMetadata.put(catalog.getConnectorId(), catalogMetadata);
                 this.catalogMetadata.put(catalog.getInformationSchemaId(), catalogMetadata);

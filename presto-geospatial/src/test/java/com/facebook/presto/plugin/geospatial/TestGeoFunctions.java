@@ -198,15 +198,23 @@ public class TestGeoFunctions
     @Test
     public void testSTCentroid()
     {
-        assertFunction("ST_AsText(ST_Centroid(ST_GeometryFromText('LINESTRING EMPTY')))", VARCHAR, "POINT EMPTY");
-        assertFunction("ST_AsText(ST_Centroid(ST_GeometryFromText('POINT (3 5)')))", VARCHAR, "POINT (3 5)");
-        assertFunction("ST_AsText(ST_Centroid(ST_GeometryFromText('MULTIPOINT (1 2, 2 4, 3 6, 4 8)')))", VARCHAR, "POINT (2.5 5)");
-        assertFunction("ST_AsText(ST_Centroid(ST_GeometryFromText('LINESTRING (1 1, 2 2, 3 3)')))", VARCHAR, "POINT (2 2)");
-        assertFunction("ST_AsText(ST_Centroid(ST_GeometryFromText('MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))')))", VARCHAR, "POINT (3 2)");
-        assertFunction("ST_AsText(ST_Centroid(ST_GeometryFromText('POLYGON ((1 1, 1 4, 4 4, 4 1))')))", VARCHAR, "POINT (2.5 2.5)");
-        assertFunction("ST_AsText(ST_Centroid(ST_GeometryFromText('POLYGON ((1 1, 5 1, 3 4))')))", VARCHAR, "POINT (3 2)");
-        assertFunction("ST_AsText(ST_Centroid(ST_GeometryFromText('MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1)), ((2 4, 2 6, 6 6, 6 4)))')))", VARCHAR, "POINT (3.3333333333333335 4)");
-        assertFunction("ST_AsText(ST_Centroid(ST_GeometryFromText('POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0), (1 1, 1 2, 2 2, 2 1, 1 1))')))", VARCHAR, "POINT (2.5416666666666665 2.5416666666666665)");
+        assertCentroid("LINESTRING EMPTY", new Point());
+        assertCentroid("POINT (3 5)", new Point(3, 5));
+        assertCentroid("MULTIPOINT (1 2, 2 4, 3 6, 4 8)", new Point(2.5, 5));
+        assertCentroid("LINESTRING (1 1, 2 2, 3 3)", new Point(2, 2));
+        assertCentroid("MULTILINESTRING ((1 1, 5 1), (2 4, 4 4))", new Point(3, 2));
+        assertCentroid("POLYGON ((1 1, 1 4, 4 4, 4 1))", new Point(2.5, 2.5));
+        assertCentroid("POLYGON ((1 1, 5 1, 3 4))", new Point(3, 2));
+        assertCentroid("MULTIPOLYGON (((1 1, 1 3, 3 3, 3 1)), ((2 4, 2 6, 6 6, 6 4)))", new Point(3.3333333333333335, 4));
+        assertCentroid("POLYGON ((0 0, 0 5, 5 5, 5 0, 0 0), (1 1, 1 2, 2 2, 2 1, 1 1))", new Point(2.5416666666666665, 2.5416666666666665));
+
+        // invalid geometry
+        assertInvalidFunction("ST_Centroid(ST_GeometryFromText('MULTIPOLYGON (((4.903234300000006 52.08474289999999, 4.903234265193165 52.084742934806826, 4.903234299999999 52.08474289999999, 4.903234300000006 52.08474289999999)))'))", "Cannot compute centroid: .* Use ST_IsValid to confirm that input geometry is valid or compute centroid for a bounding box using ST_Envelope.");
+    }
+
+    private void assertCentroid(String wkt, Point centroid)
+    {
+        assertFunction(format("ST_AsText(ST_Centroid(ST_GeometryFromText('%s')))", wkt), VARCHAR, new OGCPoint(centroid, null).asText());
     }
 
     @Test
@@ -515,8 +523,25 @@ public class TestGeoFunctions
     {
         assertFunction("ST_AsText(ST_StartPoint(ST_GeometryFromText('LINESTRING (8 4, 4 8, 5 6)')))", VARCHAR, "POINT (8 4)");
         assertFunction("ST_AsText(ST_EndPoint(ST_GeometryFromText('LINESTRING (8 4, 4 8, 5 6)')))", VARCHAR, "POINT (5 6)");
-        assertInvalidFunction("ST_AsText(ST_StartPoint(ST_GeometryFromText('POLYGON ((2 0, 2 1, 3 1))')))", "ST_StartPoint only applies to LINE_STRING. Input type is: POLYGON");
-        assertInvalidFunction("ST_AsText(ST_EndPoint(ST_GeometryFromText('POLYGON ((2 0, 2 1, 3 1))')))", "ST_EndPoint only applies to LINE_STRING. Input type is: POLYGON");
+        assertInvalidFunction("ST_StartPoint(ST_GeometryFromText('POLYGON ((2 0, 2 1, 3 1))'))", "ST_StartPoint only applies to LINE_STRING. Input type is: POLYGON");
+        assertInvalidFunction("ST_EndPoint(ST_GeometryFromText('POLYGON ((2 0, 2 1, 3 1))'))", "ST_EndPoint only applies to LINE_STRING. Input type is: POLYGON");
+    }
+
+    @Test
+    public void testSTPoints()
+    {
+        assertFunction("ST_Points(ST_GeometryFromText('LINESTRING EMPTY'))", new ArrayType(GEOMETRY), null);
+        assertSTPoints("LINESTRING (0 0, 0 0)", "0 0", "0 0");
+        assertSTPoints("LINESTRING (8 4, 3 9, 8 4)", "8 4", "3 9", "8 4");
+        assertSTPoints("LINESTRING (8 4, 3 9, 5 6)", "8 4", "3 9", "5 6");
+        assertSTPoints("LINESTRING (8 4, 3 9, 5 6, 3 9, 8 4)", "8 4", "3 9", "5 6", "3 9", "8 4");
+        assertInvalidFunction("ST_Points(ST_GeometryFromText('POLYGON ((8 4, 3 9, 5 6))'))", "ST_Points only applies to LINE_STRING. Input type is: POLYGON");
+    }
+
+    private void assertSTPoints(String wkt, String... expected)
+    {
+        assertFunction(String.format("transform(ST_Points(ST_GeometryFromText('%s')), x -> ST_AsText(x))", wkt), new ArrayType(VARCHAR),
+                Arrays.stream(expected).map(s -> "POINT (" + s + ")").collect(Collectors.toList()));
     }
 
     @Test
@@ -995,8 +1020,8 @@ public class TestGeoFunctions
         // Other ways of creating points
         assertFunction("ST_LineString(array[ST_GeometryFromText('POINT (1 2)'), ST_GeometryFromText('POINT (3 4)')])", GEOMETRY, "LINESTRING (1 2, 3 4)");
 
-        // Duplicate points work
-        assertFunction("ST_LineString(array[ST_Point(1, 2), ST_Point(1, 2)])", GEOMETRY, "LINESTRING (1 2, 1 2)");
+        // Duplicate consecutive points throws exception
+        assertInvalidFunction("ST_LineString(array[ST_Point(1, 2), ST_Point(1, 2)])", INVALID_FUNCTION_ARGUMENT, "Invalid input to ST_LineString: consecutive duplicate points at index 2");
         assertFunction("ST_LineString(array[ST_Point(1, 2), ST_Point(3, 4), ST_Point(1, 2)])", GEOMETRY, "LINESTRING (1 2, 3 4, 1 2)");
 
         // Single point
@@ -1008,17 +1033,17 @@ public class TestGeoFunctions
         // Only points can be passed
         assertInvalidFunction("ST_LineString(array[ST_Point(7,8), ST_GeometryFromText('LINESTRING (1 2, 3 4)')])", INVALID_FUNCTION_ARGUMENT, "ST_LineString takes only an array of valid points, LineString was passed");
 
-        // Nulls points ignored
-        assertFunction("ST_LineString(array[NULL])", GEOMETRY, "LINESTRING EMPTY");
-        assertFunction("ST_LineString(array[ST_Point(1,2), NULL])", GEOMETRY, "LINESTRING EMPTY");
-        assertFunction("ST_LineString(array[ST_Point(1, 2), NULL, ST_Point(3, 4)])", GEOMETRY, "LINESTRING (1 2, 3 4)");
-        assertFunction("ST_LineString(array[ST_Point(1, 2), NULL, ST_Point(3, 4), NULL])", GEOMETRY, "LINESTRING (1 2, 3 4)");
+        // Nulls points are invalid
+        assertInvalidFunction("ST_LineString(array[NULL])", INVALID_FUNCTION_ARGUMENT, "Invalid input to ST_LineString: null point at index 1");
+        assertInvalidFunction("ST_LineString(array[ST_Point(1,2), NULL])", INVALID_FUNCTION_ARGUMENT, "Invalid input to ST_LineString: null point at index 2");
+        assertInvalidFunction("ST_LineString(array[ST_Point(1, 2), NULL, ST_Point(3, 4)])", INVALID_FUNCTION_ARGUMENT, "Invalid input to ST_LineString: null point at index 2");
+        assertInvalidFunction("ST_LineString(array[ST_Point(1, 2), NULL, ST_Point(3, 4), NULL])", INVALID_FUNCTION_ARGUMENT, "Invalid input to ST_LineString: null point at index 2");
 
-        // Empty points ignored
-        assertFunction("ST_LineString(array[ST_GeometryFromText('POINT EMPTY')])", GEOMETRY, "LINESTRING EMPTY");
-        assertFunction("ST_LineString(array[ST_Point(1,2), ST_GeometryFromText('POINT EMPTY')])", GEOMETRY, "LINESTRING EMPTY");
-        assertFunction("ST_LineString(array[ST_Point(1,2), ST_GeometryFromText('POINT EMPTY'), ST_Point(3,4)])", GEOMETRY, "LINESTRING (1 2, 3 4)");
-        assertFunction("ST_LineString(array[ST_Point(1,2), ST_GeometryFromText('POINT EMPTY'), ST_Point(3,4), ST_GeometryFromText('POINT EMPTY')])", GEOMETRY, "LINESTRING (1 2, 3 4)");
+        // Empty points are invalid
+        assertInvalidFunction("ST_LineString(array[ST_GeometryFromText('POINT EMPTY')])", INVALID_FUNCTION_ARGUMENT, "Invalid input to ST_LineString: empty point at index 1");
+        assertInvalidFunction("ST_LineString(array[ST_Point(1,2), ST_GeometryFromText('POINT EMPTY')])", INVALID_FUNCTION_ARGUMENT, "Invalid input to ST_LineString: empty point at index 2");
+        assertInvalidFunction("ST_LineString(array[ST_Point(1,2), ST_GeometryFromText('POINT EMPTY'), ST_Point(3,4)])", INVALID_FUNCTION_ARGUMENT, "Invalid input to ST_LineString: empty point at index 2");
+        assertInvalidFunction("ST_LineString(array[ST_Point(1,2), ST_GeometryFromText('POINT EMPTY'), ST_Point(3,4), ST_GeometryFromText('POINT EMPTY')])", INVALID_FUNCTION_ARGUMENT, "Invalid input to ST_LineString: empty point at index 2");
     }
 
     @Test

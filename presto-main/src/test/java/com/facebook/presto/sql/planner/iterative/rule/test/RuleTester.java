@@ -14,13 +14,16 @@
 package com.facebook.presto.sql.planner.iterative.rule.test;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.security.AccessControl;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.split.PageSourceManager;
 import com.facebook.presto.split.SplitManager;
+import com.facebook.presto.sql.parser.SqlParser;
+import com.facebook.presto.sql.planner.assertions.OptimizerAssert;
 import com.facebook.presto.sql.planner.iterative.Rule;
+import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.tpch.TpchConnectorFactory;
 import com.facebook.presto.transaction.TransactionManager;
@@ -47,6 +50,7 @@ public class RuleTester
     private final SplitManager splitManager;
     private final PageSourceManager pageSourceManager;
     private final AccessControl accessControl;
+    private final SqlParser sqlParser;
 
     public RuleTester()
     {
@@ -89,11 +93,17 @@ public class RuleTester
         this.splitManager = queryRunner.getSplitManager();
         this.pageSourceManager = queryRunner.getPageSourceManager();
         this.accessControl = queryRunner.getAccessControl();
+        this.sqlParser = queryRunner.getSqlParser();
     }
 
     public RuleAssert assertThat(Rule rule)
     {
         return new RuleAssert(metadata, queryRunner.getStatsCalculator(), queryRunner.getEstimatedExchangesCostCalculator(), session, rule, transactionManager, accessControl);
+    }
+
+    public OptimizerAssert assertThat(PlanOptimizer optimizer)
+    {
+        return new OptimizerAssert(metadata, queryRunner.getStatsCalculator(), session, optimizer, transactionManager, accessControl);
     }
 
     @Override
@@ -115,6 +125,11 @@ public class RuleTester
     public PageSourceManager getPageSourceManager()
     {
         return pageSourceManager;
+    }
+
+    public SqlParser getSqlParser()
+    {
+        return sqlParser;
     }
 
     public ConnectorId getCurrentConnectorId()

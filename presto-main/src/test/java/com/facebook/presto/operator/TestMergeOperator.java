@@ -13,16 +13,17 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.buffer.PagesSerdeFactory;
 import com.facebook.presto.execution.buffer.TestingPagesSerdeFactory;
 import com.facebook.presto.metadata.RemoteTransactionHandle;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.SortOrder;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.split.RemoteSplit;
 import com.facebook.presto.sql.gen.OrderingCompiler;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
@@ -335,7 +336,7 @@ public class TestMergeOperator
         MergeOperator.MergeOperatorFactory factory = new MergeOperator.MergeOperatorFactory(
                 mergeOperatorId,
                 new PlanNodeId("plan_node_id" + mergeOperatorId),
-                exchangeClientFactory,
+                new TaskExchangeClientManager(exchangeClientFactory),
                 serdeFactory,
                 orderingCompiler,
                 sourceTypes,
@@ -350,7 +351,7 @@ public class TestMergeOperator
 
     private static Split createRemoteSplit(String taskId)
     {
-        return new Split(ExchangeOperator.REMOTE_CONNECTOR_ID, new RemoteTransactionHandle(), new RemoteSplit(URI.create("http://localhost/" + taskId)));
+        return new Split(ExchangeOperator.REMOTE_CONNECTOR_ID, new RemoteTransactionHandle(), new RemoteSplit(URI.create("http://localhost/" + taskId), TaskId.valueOf(taskId)));
     }
 
     private static List<Page> pullAvailablePages(Operator operator)

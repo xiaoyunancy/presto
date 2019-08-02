@@ -14,10 +14,10 @@
 package com.facebook.presto.sql.analyzer;
 
 import com.facebook.presto.metadata.QualifiedObjectName;
-import com.facebook.presto.metadata.Signature;
-import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.security.AccessControl;
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.security.Identity;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.tree.ExistsPredicate;
@@ -112,7 +112,7 @@ public class Analysis
     private final Map<NodeRef<Expression>, Type> coercions = new LinkedHashMap<>();
     private final Set<NodeRef<Expression>> typeOnlyCoercions = new LinkedHashSet<>();
     private final Map<NodeRef<Relation>, List<Type>> relationCoercions = new LinkedHashMap<>();
-    private final Map<NodeRef<FunctionCall>, Signature> functionSignature = new LinkedHashMap<>();
+    private final Map<NodeRef<FunctionCall>, FunctionHandle> functionHandles = new LinkedHashMap<>();
     private final Map<NodeRef<Identifier>, LambdaArgumentDeclaration> lambdaArgumentReferences = new LinkedHashMap<>();
 
     private final Map<Field, ColumnHandle> columns = new LinkedHashMap<>();
@@ -130,6 +130,7 @@ public class Analysis
     private Optional<String> createTableComment = Optional.empty();
 
     private Optional<Insert> insert = Optional.empty();
+    private Optional<TableHandle> analyzeTarget = Optional.empty();
 
     // for describe input and describe output
     private final boolean isDescribe;
@@ -451,14 +452,19 @@ public class Analysis
         tables.put(NodeRef.of(table), handle);
     }
 
-    public Signature getFunctionSignature(FunctionCall function)
+    public FunctionHandle getFunctionHandle(FunctionCall function)
     {
-        return functionSignature.get(NodeRef.of(function));
+        return functionHandles.get(NodeRef.of(function));
     }
 
-    public void addFunctionSignatures(Map<NodeRef<FunctionCall>, Signature> infos)
+    public Map<NodeRef<FunctionCall>, FunctionHandle> getFunctionHandles()
     {
-        functionSignature.putAll(infos);
+        return ImmutableMap.copyOf(functionHandles);
+    }
+
+    public void addFunctionHandles(Map<NodeRef<FunctionCall>, FunctionHandle> infos)
+    {
+        functionHandles.putAll(infos);
     }
 
     public Set<NodeRef<Expression>> getColumnReferences()
@@ -520,6 +526,16 @@ public class Analysis
     public Optional<QualifiedObjectName> getCreateTableDestination()
     {
         return createTableDestination;
+    }
+
+    public Optional<TableHandle> getAnalyzeTarget()
+    {
+        return analyzeTarget;
+    }
+
+    public void setAnalyzeTarget(TableHandle analyzeTarget)
+    {
+        this.analyzeTarget = Optional.of(analyzeTarget);
     }
 
     public void setCreateTableProperties(Map<String, Expression> createTableProperties)

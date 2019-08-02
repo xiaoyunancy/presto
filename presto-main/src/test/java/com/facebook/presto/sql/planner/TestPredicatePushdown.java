@@ -14,13 +14,22 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.sql.planner.assertions.BasePlanTest;
+import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
+import com.facebook.presto.sql.planner.iterative.rule.test.RuleTester;
 import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
+import com.facebook.presto.sql.planner.optimizations.PredicatePushDown;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
+import com.facebook.presto.sql.planner.plan.JoinNode.EquiJoinClause;
+import com.facebook.presto.sql.planner.plan.WindowNode;
+import com.facebook.presto.sql.tree.ComparisonExpression;
+import com.facebook.presto.sql.tree.LongLiteral;
+import com.facebook.presto.sql.tree.SymbolReference;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
 
 import java.util.List;
+import java.util.Optional;
 
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.any;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.anyTree;
@@ -36,8 +45,11 @@ import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.projec
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.semiJoin;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.tableScan;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
+import static com.facebook.presto.sql.planner.plan.JoinNode.DistributionType.PARTITIONED;
+import static com.facebook.presto.sql.planner.plan.JoinNode.DistributionType.REPLICATED;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.INNER;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.LEFT;
+import static com.facebook.presto.sql.tree.ComparisonExpression.Operator.EQUAL;
 
 public class TestPredicatePushdown
         extends BasePlanTest
@@ -51,7 +63,7 @@ public class TestPredicatePushdown
                                 any(
                                         tableScan("orders", ImmutableMap.of("ORDERS_OK", "orderkey"))),
                                 anyTree(
-                                        filter("cast(LINEITEM_LINENUMBER as varchar) = cast('2' as varchar)",
+                                        filter("cast('2' as varchar) = cast(LINEITEM_LINENUMBER as varchar)",
                                                 tableScan("lineitem", ImmutableMap.of(
                                                         "LINEITEM_OK", "orderkey",
                                                         "LINEITEM_LINENUMBER", "linenumber")))))));
@@ -138,12 +150,12 @@ public class TestPredicatePushdown
                 anyTree(
                         semiJoin("LINE_ORDER_KEY", "ORDERS_ORDER_KEY", "SEMI_JOIN_RESULT",
                                 anyTree(
-                                        filter("LINE_ORDER_KEY = BIGINT '2' AND BIGINT '2' = LINE_ORDER_KEY", // TODO this should be simplified
+                                        filter("LINE_ORDER_KEY = BIGINT '2'",
                                                 tableScan("lineitem", ImmutableMap.of(
                                                         "LINE_ORDER_KEY", "orderkey",
                                                         "LINE_QUANTITY", "quantity")))),
                                 anyTree(
-                                        filter("ORDERS_ORDER_KEY = BIGINT '2' AND BIGINT '2' = ORDERS_ORDER_KEY", // TODO this should be simplified
+                                        filter("ORDERS_ORDER_KEY = BIGINT '2'",
                                                 tableScan("orders", ImmutableMap.of("ORDERS_ORDER_KEY", "orderkey")))))));
     }
 
@@ -187,12 +199,12 @@ public class TestPredicatePushdown
                 anyTree(
                         semiJoin("LINE_ORDER_KEY", "ORDERS_ORDER_KEY", "SEMI_JOIN_RESULT",
                                 anyTree(
-                                        filter("LINE_ORDER_KEY = BIGINT '2' AND BIGINT '2' = LINE_ORDER_KEY", // TODO this should be simplified
+                                        filter("LINE_ORDER_KEY = BIGINT '2'",
                                                 tableScan("lineitem", ImmutableMap.of(
                                                         "LINE_ORDER_KEY", "orderkey",
                                                         "LINE_QUANTITY", "quantity")))),
                                 anyTree(
-                                        filter("ORDERS_ORDER_KEY = BIGINT '2' AND BIGINT '2' = ORDERS_ORDER_KEY", // TODO this should be simplified
+                                        filter("ORDERS_ORDER_KEY = BIGINT '2'",
                                                 tableScan("orders", ImmutableMap.of("ORDERS_ORDER_KEY", "orderkey")))))));
     }
 
@@ -351,5 +363,94 @@ public class TestPredicatePushdown
                                 tableScan("part", ImmutableMap.of(
                                         "partkey", "partkey",
                                         "size", "size")))));
+    }
+
+    @Test
+    public void testPredicateOnPartitionSymbolsPushedThroughWindow()
+    {
+        PlanMatchPattern tableScan = tableScan(
+                "orders",
+                ImmutableMap.of(
+                        "CUST_KEY", "custkey",
+                        "ORDER_KEY", "orderkey"));
+        assertPlan(
+                "SELECT * FROM (" +
+                        "SELECT custkey, orderkey, rank() OVER (PARTITION BY custkey  ORDER BY orderdate ASC)" +
+                        "FROM orders" +
+                        ") WHERE custkey = 0 AND orderkey > 0",
+                anyTree(
+                        filter("ORDER_KEY > BIGINT '0'",
+                                anyTree(
+                                        node(WindowNode.class,
+                                                anyTree(
+                                                        filter("CUST_KEY = BIGINT '0'",
+                                                                tableScan)))))));
+    }
+
+    @Test
+    public void testPredicateOnNonDeterministicSymbolsPushedDown()
+    {
+        assertPlan(
+                "SELECT * FROM (" +
+                        "SELECT random_column, orderkey, rank() OVER (PARTITION BY random_column  ORDER BY orderdate ASC)" +
+                        "FROM (select round(custkey*rand()) random_column, * from orders) " +
+                        ") WHERE random_column > 100",
+                anyTree(
+                        node(WindowNode.class,
+                                anyTree(
+                                        filter("\"ROUND\" > 1E2",
+                                                project(ImmutableMap.of("ROUND", expression("round(CAST(CUST_KEY AS double) * rand())")),
+                                                        tableScan(
+                                                                "orders",
+                                                                ImmutableMap.of("CUST_KEY", "custkey"))))))));
+    }
+
+    @Test
+    public void testNonDeterministicPredicateNotPushedDown()
+    {
+        assertPlan(
+                "SELECT * FROM (" +
+                        "SELECT custkey, orderkey, rank() OVER (PARTITION BY custkey  ORDER BY orderdate ASC)" +
+                        "FROM orders" +
+                        ") WHERE custkey > 100*rand()",
+                anyTree(
+                        filter("CAST(\"CUST_KEY\" AS double) > (1E2 * \"rand\"())",
+                                anyTree(
+                                        node(WindowNode.class,
+                                                anyTree(
+                                                        tableScan(
+                                                                "orders",
+                                                                ImmutableMap.of("CUST_KEY", "custkey"))))))));
+    }
+
+    @Test
+    public void testPredicatePushDownCreatesValidJoin()
+    {
+        RuleTester tester = new RuleTester();
+        tester.assertThat(new PredicatePushDown(tester.getMetadata(), tester.getSqlParser()))
+                .on(p ->
+                        p.join(INNER,
+                                p.filter(new ComparisonExpression(EQUAL, new SymbolReference("a1"), new LongLiteral("1")),
+                                        p.values(p.variable("a1"))),
+                                p.values(p.variable("b1")),
+                                ImmutableList.of(new EquiJoinClause(p.variable("a1"), p.variable("b1"))),
+                                ImmutableList.of(),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.empty(),
+                                Optional.of(PARTITIONED)))
+                .matches(
+                        project(
+                                join(
+                                        INNER,
+                                        ImmutableList.of(),
+                                        Optional.empty(),
+                                        Optional.of(REPLICATED),
+                                        project(
+                                                filter("a1=1",
+                                                        values("a1"))),
+                                        project(
+                                                filter("1=b1",
+                                                        values("b1"))))));
     }
 }

@@ -14,12 +14,12 @@
 package com.facebook.presto.execution;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.TaskSource;
 import com.facebook.presto.event.SplitMonitor;
 import com.facebook.presto.execution.buffer.OutputBuffer;
 import com.facebook.presto.execution.executor.TaskExecutor;
 import com.facebook.presto.memory.QueryContext;
 import com.facebook.presto.operator.TaskContext;
+import com.facebook.presto.operator.TaskExchangeClientManager;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner.LocalExecutionPlan;
 import com.facebook.presto.sql.planner.PlanFragment;
@@ -44,6 +44,7 @@ public class SqlTaskExecutionFactory
     private final SplitMonitor splitMonitor;
     private final boolean perOperatorCpuTimerEnabled;
     private final boolean cpuTimerEnabled;
+    private final boolean legacyLifespanCompletionCondition;
 
     public SqlTaskExecutionFactory(
             Executor taskNotificationExecutor,
@@ -59,16 +60,26 @@ public class SqlTaskExecutionFactory
         requireNonNull(config, "config is null");
         this.perOperatorCpuTimerEnabled = config.isPerOperatorCpuTimerEnabled();
         this.cpuTimerEnabled = config.isTaskCpuTimerEnabled();
+        this.legacyLifespanCompletionCondition = config.isLegacyLifespanCompletionCondition();
     }
 
-    public SqlTaskExecution create(Session session, QueryContext queryContext, TaskStateMachine taskStateMachine, OutputBuffer outputBuffer, PlanFragment fragment, List<TaskSource> sources, OptionalInt totalPartitions)
+    public SqlTaskExecution create(
+            Session session,
+            QueryContext queryContext,
+            TaskStateMachine taskStateMachine,
+            OutputBuffer outputBuffer,
+            TaskExchangeClientManager taskExchangeClientManager,
+            PlanFragment fragment,
+            List<TaskSource> sources,
+            OptionalInt totalPartitions)
     {
         TaskContext taskContext = queryContext.addTaskContext(
                 taskStateMachine,
                 session,
                 perOperatorCpuTimerEnabled,
                 cpuTimerEnabled,
-                totalPartitions);
+                totalPartitions,
+                legacyLifespanCompletionCondition);
 
         LocalExecutionPlan localExecutionPlan;
         try (SetThreadName ignored = new SetThreadName("Task-%s", taskStateMachine.getTaskId())) {
@@ -76,11 +87,12 @@ public class SqlTaskExecutionFactory
                 localExecutionPlan = planner.plan(
                         taskContext,
                         fragment.getRoot(),
-                        TypeProvider.copyOf(fragment.getSymbols()),
+                        TypeProvider.fromVariables(fragment.getVariables()),
                         fragment.getPartitioningScheme(),
-                        fragment.getStageExecutionStrategy(),
-                        fragment.getPartitionedSources(),
-                        outputBuffer);
+                        fragment.getStageExecutionDescriptor(),
+                        fragment.getTableScanSchedulingOrder(),
+                        outputBuffer,
+                        taskExchangeClientManager);
             }
             catch (Throwable e) {
                 // planning failed

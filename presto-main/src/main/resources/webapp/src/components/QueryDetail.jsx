@@ -222,6 +222,7 @@ const BAR_CHART_PROPERTIES = {
     height: '80px',
     barColor: '#747F96',
     zeroColor: '#8997B3',
+    chartRangeMin: 0,
     tooltipClassname: 'sparkline-tooltip',
     tooltipFormat: 'Task {{offset:offset}} - {{value}}',
     disableHiddenCheck: true,
@@ -236,12 +237,13 @@ const HISTOGRAM_PROPERTIES = {
     barColor: '#747F96',
     zeroColor: '#747F96',
     zeroAxis: true,
+    chartRangeMin: 0,
     tooltipClassname: 'sparkline-tooltip',
     tooltipFormat: '{{offset:offset}} -- {{value}} tasks',
     disableHiddenCheck: true,
 };
 
-class StageDetail extends React.Component {
+class StageSummary extends React.Component {
     constructor(props) {
         super(props);
         this.state = {
@@ -310,8 +312,8 @@ class StageDetail extends React.Component {
             const renderTimestamp = Date.now();
             const stageId = getStageNumber(stage.stageId);
 
-            StageDetail.renderHistogram('#scheduled-time-histogram-' + stageId, scheduledTimes, formatDuration);
-            StageDetail.renderHistogram('#cpu-time-histogram-' + stageId, cpuTimes, formatDuration);
+            StageSummary.renderHistogram('#scheduled-time-histogram-' + stageId, scheduledTimes, formatDuration);
+            StageSummary.renderHistogram('#cpu-time-histogram-' + stageId, cpuTimes, formatDuration);
 
             if (this.state.expanded) {
                 // this needs to be a string otherwise it will also be passed to numberFormatter
@@ -523,7 +525,7 @@ class StageDetail extends React.Component {
                                 </table>
                             </td>
                             <td className="expand-charts-container">
-                                <a onClick={this.toggleExpanded} className="expand-charts-button">
+                                <a onClick={this.toggleExpanded.bind(this)} className="expand-charts-button">
                                     <span className={"glyphicon " + this.getExpandedIcon()} style={GLYPHICON_HIGHLIGHT} data-toggle="tooltip" data-placement="top" title="More"/>
                                 </a>
                             </td>
@@ -589,7 +591,7 @@ class StageList extends React.Component {
             );
         }
 
-        const renderedStages = stages.map(stage => <StageDetail key={stage.stageId} stage={stage}/>);
+        const renderedStages = stages.map(stage => <StageSummary key={stage.stageId} stage={stage}/>);
 
         return (
             <div className="row">
@@ -616,11 +618,30 @@ const SMALL_SPARKLINE_PROPERTIES = {
 };
 
 const TASK_FILTER = {
-    ALL: function () { return true },
-    PLANNED: function (state) { return state === 'PLANNED' },
-    RUNNING: function (state) { return state === 'RUNNING' },
-    FINISHED: function (state) { return state === 'FINISHED' },
-    FAILED: function (state) { return state === 'FAILED' || state === 'ABORTED' || state === 'CANCELED' },
+    NONE: {
+        text: "None",
+        predicate: function () { return false }
+    },
+    ALL: {
+        text: "All",
+        predicate: function () { return true }
+    },
+    PLANNED: {
+        text: "Planned",
+        predicate: function (state) { return state === 'PLANNED' }
+    },
+    RUNNING: {
+        text: "Running",
+        predicate: function (state) { return state === 'RUNNING' }
+    },
+    FINISHED: {
+        text: "Finished",
+        predicate: function (state) { return state === 'FINISHED' }
+    },
+    FAILED: {
+        text: "Aborted/Canceled/Failed",
+        predicate: function (state) { return state === 'FAILED' || state === 'ABORTED' || state === 'CANCELED' }
+    },
 };
 
 export class QueryDetail extends React.Component {
@@ -653,7 +674,7 @@ export class QueryDetail extends React.Component {
             stageRefresh: true,
             taskRefresh: true,
 
-            taskFilter: TASK_FILTER.ALL,
+            taskFilter: TASK_FILTER.NONE,
         };
 
         this.refreshLoop = this.refreshLoop.bind(this);
@@ -832,9 +853,9 @@ export class QueryDetail extends React.Component {
         }
     }
 
-    renderTaskFilterListItem(taskFilter, taskFilterText) {
+    renderTaskFilterListItem(taskFilter) {
         return (
-            <li><a href="#" className={this.state.taskFilter === taskFilter ? "selected" : ""} onClick={this.handleTaskFilterClick.bind(this, taskFilter)}>{taskFilterText}</a></li>
+            <li><a href="#" className={this.state.taskFilter === taskFilter ? "selected" : ""} onClick={this.handleTaskFilterClick.bind(this, taskFilter)}>{taskFilter.text}</a></li>
         );
     }
 
@@ -890,15 +911,18 @@ export class QueryDetail extends React.Component {
             return;
         }
 
-        const tasks = this.getTasksFromStage(this.state.lastSnapshotTasks).filter(task => this.state.taskFilter(task.taskStatus.state), this);
+        let tasks = [];
+        if (this.state.taskFilter !== TASK_FILTER.NONE) {
+            tasks = this.getTasksFromStage(this.state.lastSnapshotTasks).filter(task => this.state.taskFilter.predicate(task.taskStatus.state), this);
+        }
 
         return (
             <div>
                 <div className="row">
-                    <div className="col-xs-9">
+                    <div className="col-xs-6">
                         <h3>Tasks</h3>
                     </div>
-                    <div className="col-xs-3">
+                    <div className="col-xs-6">
                         <table className="header-inline-links">
                             <tbody>
                             <tr>
@@ -906,14 +930,15 @@ export class QueryDetail extends React.Component {
                                     <div className="input-group-btn text-right">
                                         <button type="button" className="btn btn-default dropdown-toggle pull-right text-right" data-toggle="dropdown" aria-haspopup="true"
                                                 aria-expanded="false">
-                                            Show <span className="caret"/>
+                                            Show: {this.state.taskFilter.text} <span className="caret"/>
                                         </button>
                                         <ul className="dropdown-menu">
-                                            {this.renderTaskFilterListItem(TASK_FILTER.ALL, "All")}
-                                            {this.renderTaskFilterListItem(TASK_FILTER.PLANNED, "Planned")}
-                                            {this.renderTaskFilterListItem(TASK_FILTER.RUNNING, "Running")}
-                                            {this.renderTaskFilterListItem(TASK_FILTER.FINISHED, "Finished")}
-                                            {this.renderTaskFilterListItem(TASK_FILTER.FAILED, "Aborted/Canceled/Failed")}
+                                            {this.renderTaskFilterListItem(TASK_FILTER.NONE)}
+                                            {this.renderTaskFilterListItem(TASK_FILTER.ALL)}
+                                            {this.renderTaskFilterListItem(TASK_FILTER.PLANNED)}
+                                            {this.renderTaskFilterListItem(TASK_FILTER.RUNNING)}
+                                            {this.renderTaskFilterListItem(TASK_FILTER.FINISHED)}
+                                            {this.renderTaskFilterListItem(TASK_FILTER.FAILED)}
                                         </ul>
                                     </div>
                                 </td>
@@ -1011,6 +1036,35 @@ export class QueryDetail extends React.Component {
         }
 
         return renderedEstimates;
+    }
+
+    renderWarningInfo() {
+        const query = this.state.query;
+        if (query.warnings.length > 0) {
+            return (
+                <div className="row">
+                    <div className="col-xs-12">
+                        <h3>Warnings</h3>
+                        <hr className="h3-hr"/>
+                        <table className="table" id="warnings-table">
+                            {query.warnings.map((warning) =>
+                                <tr>
+                                    <td>
+                                        {warning.warningCode.name}
+                                    </td>
+                                    <td>
+                                        {warning.message}
+                                    </td>
+                                </tr>
+                            )}
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+        else {
+            return null;
+        }
     }
 
     renderFailureInfo() {
@@ -1213,6 +1267,14 @@ export class QueryDetail extends React.Component {
                             </tr>
                             <tr>
                                 <td className="info-title">
+                                    Planning Time
+                                </td>
+                                <td className="info-text">
+                                    {query.queryStats.totalPlanningTime}
+                                </td>
+                            </tr>
+                            <tr>
+                                <td className="info-title">
                                     Execution Time
                                 </td>
                                 <td className="info-text">
@@ -1313,10 +1375,10 @@ export class QueryDetail extends React.Component {
                                     </tr>
                                     <tr>
                                         <td className="info-title">
-                                            Cumulative Memory
+                                            Cumulative User Memory
                                         </td>
                                         <td className="info-text">
-                                            {formatDataSizeBytes(query.queryStats.cumulativeUserMemory / 1000.0, "") + " seconds"}
+                                            {formatDataSizeBytes(query.queryStats.cumulativeUserMemory / 1000.0) + " seconds"}
                                         </td>
                                     </tr>
                                     <tr>
@@ -1337,28 +1399,38 @@ export class QueryDetail extends React.Component {
                                     </tr>
                                     <tr>
                                         <td className="info-title">
-                                            Written Rows
+                                            Written Output Rows
                                         </td>
                                         <td className="info-text">
-                                            {formatCount(query.queryStats.writtenPositions)}
+                                            {formatCount(query.queryStats.writtenOutputPositions)}
                                         </td>
                                     </tr>
                                     <tr>
                                         <td className="info-title">
-                                            Logical Written Data
+                                            Written Output Logical Data Size
                                         </td>
                                         <td className="info-text">
-                                            {query.queryStats.logicalWrittenDataSize}
+                                            {query.queryStats.writtenOutputLogicalDataSize}
                                         </td>
                                     </tr>
                                     <tr>
                                         <td className="info-title">
-                                            Physical Written Data
+                                            Written Output Physical Data Size
                                         </td>
                                         <td className="info-text">
-                                            {query.queryStats.physicalWrittenDataSize}
+                                            {query.queryStats.writtenOutputPhysicalDataSize}
                                         </td>
                                     </tr>
+                                    {parseDataSize(query.queryStats.spilledDataSize) > 0 &&
+                                    <tr>
+                                        <td className="info-title">
+                                            Spilled Data
+                                        </td>
+                                        <td className="info-text">
+                                            {query.queryStats.spilledDataSize}
+                                        </td>
+                                    </tr>
+                                    }
                                     </tbody>
                                 </table>
                             </div>
@@ -1448,6 +1520,7 @@ export class QueryDetail extends React.Component {
                         </div>
                     </div>
                 </div>
+                {this.renderWarningInfo()}
                 {this.renderFailureInfo()}
                 <div className="row">
                     <div className="col-xs-12">

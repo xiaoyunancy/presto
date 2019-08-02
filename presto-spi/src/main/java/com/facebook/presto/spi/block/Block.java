@@ -21,6 +21,7 @@ import static com.facebook.presto.spi.block.BlockUtil.checkArrayRange;
 import static com.facebook.presto.spi.block.DictionaryId.randomDictionaryId;
 
 public interface Block
+        extends UncheckedBlock
 {
     /**
      * Gets the length of the value at the {@code position}.
@@ -32,25 +33,33 @@ public interface Block
     }
 
     /**
-     * Gets a byte at {@code offset} in the value at {@code position}.
+     * Gets a byte in the value at {@code position}.
      */
-    default byte getByte(int position, int offset)
+    default byte getByte(int position)
     {
         throw new UnsupportedOperationException(getClass().getName());
     }
 
     /**
-     * Gets a little endian short at {@code offset} in the value at {@code position}.
+     * Gets a little endian short at in the value at {@code position}.
      */
-    default short getShort(int position, int offset)
+    default short getShort(int position)
     {
         throw new UnsupportedOperationException(getClass().getName());
     }
 
     /**
-     * Gets a little endian int at {@code offset} in the value at {@code position}.
+     * Gets a little endian int in the value at {@code position}.
      */
-    default int getInt(int position, int offset)
+    default int getInt(int position)
+    {
+        throw new UnsupportedOperationException(getClass().getName());
+    }
+
+    /**
+     * Gets a little endian long in the value at {@code position}.
+     */
+    default long getLong(int position)
     {
         throw new UnsupportedOperationException(getClass().getName());
     }
@@ -188,6 +197,13 @@ public interface Block
      * The method can be expensive. Do not use it outside an implementation of Block.
      */
     long getRegionSizeInBytes(int position, int length);
+
+    /**
+     * Returns the size of of all positions marked true in the positions array.
+     * This is equivalent to multiple calls of {@code block.getRegionSizeInBytes(position, length)}
+     * where you mark all positions for the regions first.
+     */
+    long getPositionsSizeInBytes(boolean[] positions);
 
     /**
      * Returns the retained size of this block in memory, including over-allocations.

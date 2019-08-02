@@ -96,8 +96,12 @@ public class TestPlannerWarnings
         WarningCollector warningCollector = new DefaultWarningCollector(new WarningCollectorConfig());
         try {
             queryRunner.inTransaction(sessionBuilder.build(), transactionSession -> {
-                rules.map(testingRules -> createPlan(queryRunner, transactionSession, sql, warningCollector, testingRules))
-                        .orElse(queryRunner.createPlan(transactionSession, sql, LogicalPlanner.Stage.CREATED, false, warningCollector));
+                if (rules.isPresent()) {
+                    createPlan(queryRunner, transactionSession, sql, warningCollector, rules.get());
+                }
+                else {
+                    queryRunner.createPlan(transactionSession, sql, LogicalPlanner.Stage.CREATED, false, warningCollector);
+                }
                 return null;
             });
         }
@@ -123,8 +127,9 @@ public class TestPlannerWarnings
                 queryRunner.getCostCalculator(),
                 ImmutableSet.copyOf(rules));
 
-        return queryRunner.createPlan(session, sql, ImmutableList.of(optimizer), LogicalPlanner.Stage.OPTIMIZED_AND_VALIDATED, warningCollector);
+        return queryRunner.createPlan(session, sql, ImmutableList.of(optimizer, queryRunner.translateExpressions()), LogicalPlanner.Stage.OPTIMIZED_AND_VALIDATED, warningCollector);
     }
+
     public static List<PrestoWarning> createTestWarnings(int numberOfWarnings)
     {
         checkArgument(numberOfWarnings > 0, "numberOfWarnings must be > 0");

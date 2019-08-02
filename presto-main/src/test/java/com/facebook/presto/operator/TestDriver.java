@@ -13,22 +13,22 @@
  */
 package com.facebook.presto.operator;
 
-import com.facebook.presto.ScheduledSplit;
 import com.facebook.presto.Session;
-import com.facebook.presto.TaskSource;
-import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.execution.ScheduledSplit;
+import com.facebook.presto.execution.TaskSource;
 import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.FixedPageSource;
 import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.split.PageSourceProvider;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.PageConsumerOperator;
 import com.facebook.presto.testing.TestingTransactionHandle;
@@ -118,7 +118,7 @@ public class TestDriver
     }
 
     // The race can be reproduced somewhat reliably when the invocationCount is 10K, but we use 1K iterations to cap the test runtime.
-    @Test(invocationCount = 1_000, timeOut = 1_000)
+    @Test(invocationCount = 1_000, timeOut = 10_000)
     public void testConcurrentClose()
     {
         List<Type> types = ImmutableList.of(VARCHAR, BIGINT, BIGINT);

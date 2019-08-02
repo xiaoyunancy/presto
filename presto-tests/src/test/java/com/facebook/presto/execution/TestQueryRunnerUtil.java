@@ -18,8 +18,10 @@ import com.facebook.presto.server.BasicQueryInfo;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.tests.DistributedQueryRunner;
 import com.facebook.presto.tpch.TpchPlugin;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 
+import java.util.Map;
 import java.util.Set;
 
 import static com.facebook.presto.execution.QueryState.RUNNING;
@@ -34,9 +36,8 @@ public final class TestQueryRunnerUtil
     public static QueryId createQuery(DistributedQueryRunner queryRunner, Session session, String sql)
     {
         QueryManager queryManager = queryRunner.getCoordinator().getQueryManager();
-        QueryId queryId = queryManager.createQueryId();
-        getFutureValue(queryManager.createQuery(queryId, new TestingSessionContext(session), sql));
-        return queryId;
+        getFutureValue(queryManager.createQuery(session.getQueryId(), new TestingSessionContext(session), sql));
+        return session.getQueryId();
     }
 
     public static void cancelQuery(DistributedQueryRunner queryRunner, QueryId queryId)
@@ -69,7 +70,14 @@ public final class TestQueryRunnerUtil
     public static DistributedQueryRunner createQueryRunner()
             throws Exception
     {
+        return createQueryRunner(ImmutableMap.of());
+    }
+
+    public static DistributedQueryRunner createQueryRunner(Map<String, String> extraProperties)
+            throws Exception
+    {
         DistributedQueryRunner queryRunner = DistributedQueryRunner.builder(testSessionBuilder().build())
+                .setExtraProperties(extraProperties)
                 .setNodeCount(2)
                 .build();
 

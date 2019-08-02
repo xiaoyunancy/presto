@@ -14,6 +14,8 @@
 package com.facebook.presto.parquet.predicate;
 
 import com.facebook.presto.parquet.DictionaryPage;
+import com.facebook.presto.parquet.ParquetCorruptionException;
+import com.facebook.presto.parquet.ParquetDataSourceId;
 import com.facebook.presto.parquet.RichColumnDescriptor;
 import com.facebook.presto.parquet.dictionary.Dictionary;
 import com.facebook.presto.spi.predicate.Domain;
@@ -22,19 +24,19 @@ import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.predicate.ValueSet;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
-import parquet.column.ColumnDescriptor;
-import parquet.column.statistics.BinaryStatistics;
-import parquet.column.statistics.BooleanStatistics;
-import parquet.column.statistics.DoubleStatistics;
-import parquet.column.statistics.FloatStatistics;
-import parquet.column.statistics.IntStatistics;
-import parquet.column.statistics.LongStatistics;
-import parquet.column.statistics.Statistics;
-import parquet.schema.PrimitiveType.PrimitiveTypeName;
+import org.apache.parquet.column.ColumnDescriptor;
+import org.apache.parquet.column.statistics.BinaryStatistics;
+import org.apache.parquet.column.statistics.BooleanStatistics;
+import org.apache.parquet.column.statistics.DoubleStatistics;
+import org.apache.parquet.column.statistics.FloatStatistics;
+import org.apache.parquet.column.statistics.IntStatistics;
+import org.apache.parquet.column.statistics.LongStatistics;
+import org.apache.parquet.column.statistics.Statistics;
+import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -42,10 +44,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 
-import static com.facebook.presto.parquet.ParquetTypeUtils.getPrestoType;
 import static com.facebook.presto.parquet.predicate.PredicateUtils.isStatisticsOverflow;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.RealType.REAL;
@@ -53,6 +55,7 @@ import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
 import static com.facebook.presto.spi.type.TinyintType.TINYINT;
 import static com.facebook.presto.spi.type.Varchars.isVarcharType;
 import static java.lang.Float.floatToRawIntBits;
+import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 public class TupleDomainParquetPredicate
@@ -68,51 +71,67 @@ public class TupleDomainParquetPredicate
     }
 
     @Override
-    public boolean matches(long numberOfRows, Map<ColumnDescriptor, Statistics<?>> statistics)
+    public boolean matches(long numberOfRows, Map<ColumnDescriptor, Statistics<?>> statistics, ParquetDataSourceId id, boolean failOnCorruptedParquetStatistics)
+            throws ParquetCorruptionException
     {
         if (numberOfRows == 0) {
             return false;
         }
-        ImmutableMap.Builder<ColumnDescriptor, Domain> domains = ImmutableMap.builder();
+
+        if (effectivePredicate.isNone()) {
+            return false;
+        }
+
+        Map<ColumnDescriptor, Domain> effectivePredicateDomains = effectivePredicate.getDomains()
+                .orElseThrow(() -> new IllegalStateException("Effective predicate other than none should have domains"));
 
         for (RichColumnDescriptor column : columns) {
-            Statistics<?> columnStatistics = statistics.get(column);
+            Domain effectivePredicateDomain = effectivePredicateDomains.get(column);
+            if (effectivePredicateDomain == null) {
+                continue;
+            }
 
-            Domain domain;
-            Type type = getPrestoType(effectivePredicate, column);
+            Statistics<?> columnStatistics = statistics.get(column);
             if (columnStatistics == null || columnStatistics.isEmpty()) {
                 // no stats for column
-                domain = Domain.all(type);
             }
             else {
-                domain = getDomain(type, numberOfRows, columnStatistics);
+                Domain domain = getDomain(effectivePredicateDomain.getType(), numberOfRows, columnStatistics, id, column.toString(), failOnCorruptedParquetStatistics);
+                if (effectivePredicateDomain.intersect(domain).isNone()) {
+                    return false;
+                }
             }
-            domains.put(column, domain);
         }
-        TupleDomain<ColumnDescriptor> stripeDomain = TupleDomain.withColumnDomains(domains.build());
-
-        return effectivePredicate.overlaps(stripeDomain);
+        return true;
     }
 
     @Override
     public boolean matches(Map<ColumnDescriptor, DictionaryDescriptor> dictionaries)
     {
-        ImmutableMap.Builder<ColumnDescriptor, Domain> domains = ImmutableMap.builder();
+        if (effectivePredicate.isNone()) {
+            return false;
+        }
+
+        Map<ColumnDescriptor, Domain> effectivePredicateDomains = effectivePredicate.getDomains()
+                .orElseThrow(() -> new IllegalStateException("Effective predicate other than none should have domains"));
 
         for (RichColumnDescriptor column : columns) {
+            Domain effectivePredicateDomain = effectivePredicateDomains.get(column);
+            if (effectivePredicateDomain == null) {
+                continue;
+            }
             DictionaryDescriptor dictionaryDescriptor = dictionaries.get(column);
-            Domain domain = getDomain(getPrestoType(effectivePredicate, column), dictionaryDescriptor);
-            if (domain != null) {
-                domains.put(column, domain);
+            Domain domain = getDomain(effectivePredicateDomain.getType(), dictionaryDescriptor);
+            if (effectivePredicateDomain.intersect(domain).isNone()) {
+                return false;
             }
         }
-        TupleDomain<ColumnDescriptor> stripeDomain = TupleDomain.withColumnDomains(domains.build());
-
-        return effectivePredicate.overlaps(stripeDomain);
+        return true;
     }
 
     @VisibleForTesting
-    public static Domain getDomain(Type type, long rowCount, Statistics<?> statistics)
+    public static Domain getDomain(Type type, long rowCount, Statistics<?> statistics, ParquetDataSourceId id, String column, boolean failOnCorruptedParquetStatistics)
+            throws ParquetCorruptionException
     {
         if (statistics == null || statistics.isEmpty()) {
             return Domain.all(type);
@@ -124,7 +143,6 @@ public class TupleDomainParquetPredicate
 
         boolean hasNullValue = statistics.getNumNulls() != 0L;
 
-        // ignore corrupted statistics
         if (statistics.genericGetMin() == null || statistics.genericGetMax() == null) {
             return Domain.create(ValueSet.all(type), hasNullValue);
         }
@@ -143,21 +161,24 @@ public class TupleDomainParquetPredicate
             if (hasFalseValues) {
                 return Domain.create(ValueSet.of(type, false), hasNullValue);
             }
+            // All nulls case is handled earlier
+            throw new VerifyException("Impossible boolean statistics");
         }
-        else if ((type.equals(BIGINT) || type.equals(TINYINT) || type.equals(SMALLINT) || type.equals(INTEGER)) && (statistics instanceof LongStatistics || statistics instanceof IntStatistics)) {
+
+        if ((type.equals(BIGINT) || type.equals(TINYINT) || type.equals(SMALLINT) || type.equals(INTEGER)) && (statistics instanceof LongStatistics || statistics instanceof IntStatistics)) {
             ParquetIntegerStatistics parquetIntegerStatistics;
             if (statistics instanceof LongStatistics) {
                 LongStatistics longStatistics = (LongStatistics) statistics;
-                // ignore corrupted statistics
                 if (longStatistics.genericGetMin() > longStatistics.genericGetMax()) {
+                    failWithCorruptionException(failOnCorruptedParquetStatistics, column, id, longStatistics);
                     return Domain.create(ValueSet.all(type), hasNullValue);
                 }
                 parquetIntegerStatistics = new ParquetIntegerStatistics(longStatistics.genericGetMin(), longStatistics.genericGetMax());
             }
             else {
                 IntStatistics intStatistics = (IntStatistics) statistics;
-                // ignore corrupted statistics
                 if (intStatistics.genericGetMin() > intStatistics.genericGetMax()) {
+                    failWithCorruptionException(failOnCorruptedParquetStatistics, column, id, intStatistics);
                     return Domain.create(ValueSet.all(type), hasNullValue);
                 }
                 parquetIntegerStatistics = new ParquetIntegerStatistics((long) intStatistics.getMin(), (long) intStatistics.getMax());
@@ -167,10 +188,11 @@ public class TupleDomainParquetPredicate
             }
             return createDomain(type, hasNullValue, parquetIntegerStatistics);
         }
-        else if (type.equals(REAL) && statistics instanceof FloatStatistics) {
+
+        if (type.equals(REAL) && statistics instanceof FloatStatistics) {
             FloatStatistics floatStatistics = (FloatStatistics) statistics;
-            // ignore corrupted statistics
             if (floatStatistics.genericGetMin() > floatStatistics.genericGetMax()) {
+                failWithCorruptionException(failOnCorruptedParquetStatistics, column, id, floatStatistics);
                 return Domain.create(ValueSet.all(type), hasNullValue);
             }
 
@@ -180,26 +202,39 @@ public class TupleDomainParquetPredicate
 
             return createDomain(type, hasNullValue, parquetStatistics);
         }
-        else if (type.equals(DOUBLE) && statistics instanceof DoubleStatistics) {
+
+        if (type.equals(DOUBLE) && statistics instanceof DoubleStatistics) {
             DoubleStatistics doubleStatistics = (DoubleStatistics) statistics;
-            // ignore corrupted statistics
             if (doubleStatistics.genericGetMin() > doubleStatistics.genericGetMax()) {
+                failWithCorruptionException(failOnCorruptedParquetStatistics, column, id, doubleStatistics);
                 return Domain.create(ValueSet.all(type), hasNullValue);
             }
             ParquetDoubleStatistics parquetDoubleStatistics = new ParquetDoubleStatistics(doubleStatistics.genericGetMin(), doubleStatistics.genericGetMax());
             return createDomain(type, hasNullValue, parquetDoubleStatistics);
         }
-        else if (isVarcharType(type) && statistics instanceof BinaryStatistics) {
+
+        if (isVarcharType(type) && statistics instanceof BinaryStatistics) {
             BinaryStatistics binaryStatistics = (BinaryStatistics) statistics;
-            Slice minSlice = Slices.wrappedBuffer(binaryStatistics.getMin().getBytes());
-            Slice maxSlice = Slices.wrappedBuffer(binaryStatistics.getMax().getBytes());
-            // ignore corrupted statistics
+            Slice minSlice = Slices.wrappedBuffer(binaryStatistics.genericGetMin().getBytes());
+            Slice maxSlice = Slices.wrappedBuffer(binaryStatistics.genericGetMax().getBytes());
             if (minSlice.compareTo(maxSlice) > 0) {
+                failWithCorruptionException(failOnCorruptedParquetStatistics, column, id, binaryStatistics);
                 return Domain.create(ValueSet.all(type), hasNullValue);
             }
             ParquetStringStatistics parquetStringStatistics = new ParquetStringStatistics(minSlice, maxSlice);
             return createDomain(type, hasNullValue, parquetStringStatistics);
         }
+
+        if (type.equals(DATE) && statistics instanceof IntStatistics) {
+            IntStatistics intStatistics = (IntStatistics) statistics;
+            if (intStatistics.genericGetMin() > intStatistics.genericGetMax()) {
+                failWithCorruptionException(failOnCorruptedParquetStatistics, column, id, intStatistics);
+                return Domain.create(ValueSet.all(type), hasNullValue);
+            }
+            ParquetIntegerStatistics parquetIntegerStatistics = new ParquetIntegerStatistics((long) intStatistics.getMin(), (long) intStatistics.getMax());
+            return createDomain(type, hasNullValue, parquetIntegerStatistics);
+        }
+
         return Domain.create(ValueSet.all(type), hasNullValue);
     }
 
@@ -207,13 +242,13 @@ public class TupleDomainParquetPredicate
     public static Domain getDomain(Type type, DictionaryDescriptor dictionaryDescriptor)
     {
         if (dictionaryDescriptor == null) {
-            return null;
+            return Domain.all(type);
         }
 
         ColumnDescriptor columnDescriptor = dictionaryDescriptor.getColumnDescriptor();
         Optional<DictionaryPage> dictionaryPage = dictionaryDescriptor.getDictionaryPage();
         if (!dictionaryPage.isPresent()) {
-            return null;
+            return Domain.all(type);
         }
 
         Dictionary dictionary;
@@ -223,7 +258,8 @@ public class TupleDomainParquetPredicate
         catch (Exception e) {
             // In case of exception, just continue reading the data, not using dictionary page at all
             // OK to ignore exception when reading dictionaries
-            return null;
+            // TODO take failOnCorruptedParquetStatistics parameter and handle appropriately
+            return Domain.all(type);
         }
 
         int dictionarySize = dictionaryPage.get().getDictionarySize();
@@ -235,7 +271,8 @@ public class TupleDomainParquetPredicate
             domains.add(Domain.onlyNull(type));
             return Domain.union(domains);
         }
-        else if (type.equals(BIGINT) && columnDescriptor.getType() == PrimitiveTypeName.INT32) {
+
+        if ((type.equals(BIGINT) || type.equals(DATE)) && columnDescriptor.getType() == PrimitiveTypeName.INT32) {
             List<Domain> domains = new ArrayList<>();
             for (int i = 0; i < dictionarySize; i++) {
                 domains.add(Domain.singleValue(type, (long) dictionary.decodeToInt(i)));
@@ -243,7 +280,8 @@ public class TupleDomainParquetPredicate
             domains.add(Domain.onlyNull(type));
             return Domain.union(domains);
         }
-        else if (type.equals(DOUBLE) && columnDescriptor.getType() == PrimitiveTypeName.DOUBLE) {
+
+        if (type.equals(DOUBLE) && columnDescriptor.getType() == PrimitiveTypeName.DOUBLE) {
             List<Domain> domains = new ArrayList<>();
             for (int i = 0; i < dictionarySize; i++) {
                 domains.add(Domain.singleValue(type, dictionary.decodeToDouble(i)));
@@ -251,7 +289,8 @@ public class TupleDomainParquetPredicate
             domains.add(Domain.onlyNull(type));
             return Domain.union(domains);
         }
-        else if (type.equals(DOUBLE) && columnDescriptor.getType() == PrimitiveTypeName.FLOAT) {
+
+        if (type.equals(DOUBLE) && columnDescriptor.getType() == PrimitiveTypeName.FLOAT) {
             List<Domain> domains = new ArrayList<>();
             for (int i = 0; i < dictionarySize; i++) {
                 domains.add(Domain.singleValue(type, (double) dictionary.decodeToFloat(i)));
@@ -259,7 +298,8 @@ public class TupleDomainParquetPredicate
             domains.add(Domain.onlyNull(type));
             return Domain.union(domains);
         }
-        else if (isVarcharType(type) && columnDescriptor.getType() == PrimitiveTypeName.BINARY) {
+
+        if (isVarcharType(type) && columnDescriptor.getType() == PrimitiveTypeName.BINARY) {
             List<Domain> domains = new ArrayList<>();
             for (int i = 0; i < dictionarySize; i++) {
                 domains.add(Domain.singleValue(type, Slices.wrappedBuffer(dictionary.decodeToBinary(i).getBytes())));
@@ -267,7 +307,16 @@ public class TupleDomainParquetPredicate
             domains.add(Domain.onlyNull(type));
             return Domain.union(domains);
         }
-        return null;
+
+        return Domain.all(type);
+    }
+
+    private static void failWithCorruptionException(boolean failOnCorruptedParquetStatistics, String column, ParquetDataSourceId id, Statistics statistics)
+            throws ParquetCorruptionException
+    {
+        if (failOnCorruptedParquetStatistics) {
+            throw new ParquetCorruptionException(format("Corrupted statistics for column \"%s\" in Parquet file \"%s\": [%s]", column, id, statistics));
+        }
     }
 
     private static <T extends Comparable<T>> Domain createDomain(Type type, boolean hasNullValue, ParquetRangeStatistics<T> rangeStatistics)

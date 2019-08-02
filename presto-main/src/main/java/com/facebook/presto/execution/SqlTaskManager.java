@@ -13,22 +13,20 @@
  */
 package com.facebook.presto.execution;
 
-import com.facebook.presto.OutputBuffers;
-import com.facebook.presto.OutputBuffers.OutputBufferId;
 import com.facebook.presto.Session;
-import com.facebook.presto.TaskSource;
 import com.facebook.presto.event.SplitMonitor;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.execution.buffer.BufferResult;
+import com.facebook.presto.execution.buffer.OutputBuffers;
+import com.facebook.presto.execution.buffer.OutputBuffers.OutputBufferId;
 import com.facebook.presto.execution.executor.TaskExecutor;
-import com.facebook.presto.memory.DefaultQueryContext;
-import com.facebook.presto.memory.LegacyQueryContext;
 import com.facebook.presto.memory.LocalMemoryManager;
 import com.facebook.presto.memory.MemoryPool;
 import com.facebook.presto.memory.MemoryPoolAssignment;
 import com.facebook.presto.memory.MemoryPoolAssignmentsRequest;
 import com.facebook.presto.memory.NodeMemoryConfig;
 import com.facebook.presto.memory.QueryContext;
+import com.facebook.presto.operator.ExchangeClientSupplier;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spiller.LocalSpillManager;
@@ -68,13 +66,13 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.SystemSessionProperties.resourceOvercommit;
+import static com.facebook.presto.execution.SqlTask.createSqlTask;
 import static com.facebook.presto.memory.LocalMemoryManager.GENERAL_POOL;
 import static com.facebook.presto.memory.LocalMemoryManager.RESERVED_POOL;
 import static com.facebook.presto.spi.StandardErrorCode.ABANDONED_TASK;
 import static com.facebook.presto.spi.StandardErrorCode.SERVER_SHUTTING_DOWN;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Predicates.notNull;
-import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.Iterables.filter;
 import static com.google.common.collect.Iterables.transform;
 import static io.airlift.concurrent.Threads.threadsNamed;
@@ -123,6 +121,7 @@ public class SqlTaskManager
             TaskManagerConfig config,
             NodeMemoryConfig nodeMemoryConfig,
             LocalSpillManager localSpillManager,
+            ExchangeClientSupplier exchangeClientSupplier,
             NodeSpillConfig nodeSpillConfig,
             GcMonitor gcMonitor)
     {
@@ -150,12 +149,13 @@ public class SqlTaskManager
                 queryId -> createQueryContext(queryId, localMemoryManager, nodeMemoryConfig, localSpillManager, gcMonitor, maxQueryUserMemoryPerNode, maxQueryTotalMemoryPerNode, maxQuerySpillPerNode)));
 
         tasks = CacheBuilder.newBuilder().build(CacheLoader.from(
-                taskId -> new SqlTask(
+                taskId -> createSqlTask(
                         taskId,
                         locationFactory.createLocalTaskLocation(taskId),
                         nodeInfo.getNodeId(),
                         queryContexts.getUnchecked(taskId.getQueryId()),
                         sqlTaskExecutionFactory,
+                        exchangeClientSupplier,
                         taskNotificationExecutor,
                         sqlTask -> {
                             finishedTaskStats.merge(sqlTask.getIoStats());
@@ -175,22 +175,7 @@ public class SqlTaskManager
             DataSize maxQueryTotalMemoryPerNode,
             DataSize maxQuerySpillPerNode)
     {
-        if (nodeMemoryConfig.isLegacySystemPoolEnabled()) {
-            Optional<MemoryPool> systemPool = localMemoryManager.getSystemPool();
-            verify(systemPool.isPresent(), "systemPool must be present");
-            return new LegacyQueryContext(
-                    queryId,
-                    maxQueryUserMemoryPerNode,
-                    localMemoryManager.getGeneralPool(),
-                    systemPool.get(),
-                    gcMonitor,
-                    taskNotificationExecutor,
-                    driverYieldExecutor,
-                    maxQuerySpillPerNode,
-                    localSpillManager.getSpillSpaceTracker());
-        }
-
-        return new DefaultQueryContext(
+        return new QueryContext(
                 queryId,
                 maxQueryUserMemoryPerNode,
                 maxQueryTotalMemoryPerNode,
@@ -224,7 +209,7 @@ public class SqlTaskManager
                 queryContexts.getUnchecked(assignment.getQueryId()).setMemoryPool(reservedPool);
             }
             else {
-                new IllegalArgumentException(format("Cannot move %s to %s as the target memory pool id is invalid", assignment.getQueryId(), assignment.getPoolId()));
+                throw new IllegalArgumentException(format("Cannot move %s to %s as the target memory pool id is invalid", assignment.getQueryId(), assignment.getPoolId()));
             }
         }
     }
@@ -409,6 +394,15 @@ public class SqlTaskManager
         requireNonNull(bufferId, "bufferId is null");
 
         return tasks.getUnchecked(taskId).abortTaskResults(bufferId);
+    }
+
+    @Override
+    public void removeRemoteSource(TaskId taskId, TaskId remoteSourceTaskId)
+    {
+        requireNonNull(taskId, "taskId is null");
+        requireNonNull(remoteSourceTaskId, "remoteSourceTaskId is null");
+
+        tasks.getUnchecked(taskId).removeRemoteSource(remoteSourceTaskId);
     }
 
     @Override

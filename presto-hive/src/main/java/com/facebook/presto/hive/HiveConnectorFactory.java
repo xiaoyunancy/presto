@@ -31,12 +31,15 @@ import com.facebook.presto.spi.connector.ConnectorFactory;
 import com.facebook.presto.spi.connector.ConnectorNodePartitioningProvider;
 import com.facebook.presto.spi.connector.ConnectorPageSinkProvider;
 import com.facebook.presto.spi.connector.ConnectorPageSourceProvider;
+import com.facebook.presto.spi.connector.ConnectorPlanOptimizerProvider;
 import com.facebook.presto.spi.connector.ConnectorSplitManager;
 import com.facebook.presto.spi.connector.classloader.ClassLoaderSafeConnectorPageSinkProvider;
 import com.facebook.presto.spi.connector.classloader.ClassLoaderSafeConnectorPageSourceProvider;
 import com.facebook.presto.spi.connector.classloader.ClassLoaderSafeConnectorSplitManager;
 import com.facebook.presto.spi.connector.classloader.ClassLoaderSafeNodePartitioningProvider;
+import com.facebook.presto.spi.function.StandardFunctionResolution;
 import com.facebook.presto.spi.procedure.Procedure;
+import com.facebook.presto.spi.relation.RowExpressionService;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableSet;
 import com.google.inject.Injector;
@@ -65,14 +68,14 @@ public class HiveConnectorFactory
 {
     private final String name;
     private final ClassLoader classLoader;
-    private final ExtendedHiveMetastore metastore;
+    private final Optional<ExtendedHiveMetastore> metastore;
 
-    public HiveConnectorFactory(String name, ClassLoader classLoader, ExtendedHiveMetastore metastore)
+    public HiveConnectorFactory(String name, ClassLoader classLoader, Optional<ExtendedHiveMetastore> metastore)
     {
         checkArgument(!isNullOrEmpty(name), "name is null or empty");
         this.name = name;
         this.classLoader = requireNonNull(classLoader, "classLoader is null");
-        this.metastore = metastore;
+        this.metastore = requireNonNull(metastore, "metastore is null");
     }
 
     @Override
@@ -99,7 +102,7 @@ public class HiveConnectorFactory
                     new JsonModule(),
                     new HiveClientModule(catalogName),
                     new HiveS3Module(catalogName),
-                    new HiveMetastoreModule(catalogName, Optional.ofNullable(metastore)),
+                    new HiveMetastoreModule(catalogName, metastore),
                     new HiveSecurityModule(),
                     new HiveAuthenticationModule(),
                     new HiveProcedureModule(),
@@ -111,12 +114,15 @@ public class HiveConnectorFactory
                         binder.bind(TypeManager.class).toInstance(context.getTypeManager());
                         binder.bind(PageIndexerFactory.class).toInstance(context.getPageIndexerFactory());
                         binder.bind(PageSorter.class).toInstance(context.getPageSorter());
+                        binder.bind(StandardFunctionResolution.class).toInstance(context.getStandardFunctionResolution());
+                        binder.bind(RowExpressionService.class).toInstance(context.getRowExpressionService());
                     });
 
             Injector injector = app
                     .strictConfig()
                     .doNotInitializeLogging()
                     .setRequiredConfigurationProperties(config)
+                    .quiet()
                     .initialize();
 
             LifeCycleManager lifeCycleManager = injector.getInstance(LifeCycleManager.class);
@@ -128,8 +134,10 @@ public class HiveConnectorFactory
             ConnectorNodePartitioningProvider connectorDistributionProvider = injector.getInstance(ConnectorNodePartitioningProvider.class);
             HiveSessionProperties hiveSessionProperties = injector.getInstance(HiveSessionProperties.class);
             HiveTableProperties hiveTableProperties = injector.getInstance(HiveTableProperties.class);
+            HiveAnalyzeProperties hiveAnalyzeProperties = injector.getInstance(HiveAnalyzeProperties.class);
             ConnectorAccessControl accessControl = new PartitionsAwareAccessControl(injector.getInstance(ConnectorAccessControl.class));
             Set<Procedure> procedures = injector.getInstance(Key.get(new TypeLiteral<Set<Procedure>>() {}));
+            ConnectorPlanOptimizerProvider planOptimizerProvider = injector.getInstance(ConnectorPlanOptimizerProvider.class);
 
             return new HiveConnector(
                     lifeCycleManager,
@@ -144,7 +152,9 @@ public class HiveConnectorFactory
                     hiveSessionProperties.getSessionProperties(),
                     HiveSchemaProperties.SCHEMA_PROPERTIES,
                     hiveTableProperties.getTableProperties(),
+                    hiveAnalyzeProperties.getAnalyzeProperties(),
                     accessControl,
+                    planOptimizerProvider,
                     classLoader);
         }
         catch (Exception e) {

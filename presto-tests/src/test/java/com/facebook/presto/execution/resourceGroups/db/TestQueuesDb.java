@@ -53,6 +53,7 @@ import static com.facebook.presto.execution.resourceGroups.db.H2TestUtil.rejecti
 import static com.facebook.presto.execution.resourceGroups.db.H2TestUtil.waitForCompleteQueryCount;
 import static com.facebook.presto.execution.resourceGroups.db.H2TestUtil.waitForRunningQueryCount;
 import static com.facebook.presto.spi.StandardErrorCode.EXCEEDED_TIME_LIMIT;
+import static com.facebook.presto.spi.StandardErrorCode.INVALID_RESOURCE_GROUP;
 import static com.facebook.presto.spi.StandardErrorCode.QUERY_REJECTED;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static io.airlift.testing.Assertions.assertContains;
@@ -258,23 +259,33 @@ public class TestQueuesDb
     public void testQueryExecutionTimeLimit()
             throws Exception
     {
-        Session session = testSessionBuilder()
-                .setCatalog("tpch")
-                .setSchema("sf100000")
-                .setSource("dashboard")
-                .setSystemProperty(QUERY_MAX_EXECUTION_TIME, "1ms")
-                .build();
         QueryManager queryManager = queryRunner.getCoordinator().getQueryManager();
         InternalResourceGroupManager manager = queryRunner.getCoordinator().getResourceGroupManager().get();
         DbResourceGroupConfigurationManager dbConfigurationManager = (DbResourceGroupConfigurationManager) manager.getConfigurationManager();
-        QueryId firstQuery = createQuery(queryRunner, session, LONG_LASTING_QUERY);
+        QueryId firstQuery = createQuery(
+                queryRunner,
+                testSessionBuilder()
+                        .setCatalog("tpch")
+                        .setSchema("sf100000")
+                        .setSource("dashboard")
+                        .setSystemProperty(QUERY_MAX_EXECUTION_TIME, "1ms")
+                        .build(),
+                LONG_LASTING_QUERY);
         waitForQueryState(queryRunner, firstQuery, FAILED);
         assertEquals(queryManager.getFullQueryInfo(firstQuery).getErrorCode(), EXCEEDED_TIME_LIMIT.toErrorCode());
         assertContains(queryManager.getFullQueryInfo(firstQuery).getFailureInfo().getMessage(), "Query exceeded the maximum execution time limit of 1.00ms");
         // set max running queries to 0 for the dashboard resource group so that new queries get queued immediately
         dao.updateResourceGroup(5, "dashboard-${USER}", "1MB", 1, null, 0, null, null, null, null, null, 3L, TEST_ENVIRONMENT);
         dbConfigurationManager.load();
-        QueryId secondQuery = createQuery(queryRunner, session, LONG_LASTING_QUERY);
+        QueryId secondQuery = createQuery(
+                queryRunner,
+                testSessionBuilder()
+                        .setCatalog("tpch")
+                        .setSchema("sf100000")
+                        .setSource("dashboard")
+                        .setSystemProperty(QUERY_MAX_EXECUTION_TIME, "1ms")
+                        .build(),
+                LONG_LASTING_QUERY);
         //this query should immediately get queued
         waitForQueryState(queryRunner, secondQuery, QUEUED);
         // after a 5s wait this query should still be QUEUED, not FAILED as the max execution time should be enforced after the query starts running
@@ -310,6 +321,36 @@ public class TestQueuesDb
     {
         assertResourceGroupWithClientTags(ImmutableSet.of("tag1"), createResourceGroupId("global", "bi-user"));
         assertResourceGroupWithClientTags(ImmutableSet.of("tag1", "tag2"), createResourceGroupId("global", "user-user", "adhoc-user"));
+    }
+
+    @Test
+    public void testNonLeafGroup()
+            throws Exception
+    {
+        Session session = testSessionBuilder()
+                .setCatalog("tpch")
+                .setSchema("sf100000")
+                .setSource("non-leaf")
+                .build();
+        QueryManager queryManager = queryRunner.getCoordinator().getQueryManager();
+        InternalResourceGroupManager manager = queryRunner.getCoordinator().getResourceGroupManager().get();
+        DbResourceGroupConfigurationManager dbConfigurationManager = (DbResourceGroupConfigurationManager) manager.getConfigurationManager();
+        int originalSize = getSelectors(queryRunner).size();
+        // Add a selector for a non leaf group
+        dao.insertSelector(3, 100, "user.*", "(?i).*non-leaf.*", null, null, null);
+        dbConfigurationManager.load();
+        while (getSelectors(queryRunner).size() != originalSize + 1) {
+            MILLISECONDS.sleep(500);
+        }
+        // Submit query with side effect of creating resource groups
+        QueryId firstDashboardQuery = createQuery(queryRunner, dashboardSession(), LONG_LASTING_QUERY);
+        waitForQueryState(queryRunner, firstDashboardQuery, RUNNING);
+        cancelQuery(queryRunner, firstDashboardQuery);
+        waitForQueryState(queryRunner, firstDashboardQuery, FAILED);
+        // Submit a query to a non-leaf resource group
+        QueryId invalidResourceGroupQuery = createQuery(queryRunner, session, LONG_LASTING_QUERY);
+        waitForQueryState(queryRunner, invalidResourceGroupQuery, FAILED);
+        assertEquals(queryRunner.getQueryInfo(invalidResourceGroupQuery).getErrorCode(), INVALID_RESOURCE_GROUP.toErrorCode());
     }
 
     private void assertResourceGroupWithClientTags(Set<String> clientTags, ResourceGroupId expectedResourceGroup)

@@ -65,6 +65,20 @@ export class QueryListItem extends React.Component {
         return truncateString(formattedQueryText, 300);
     }
 
+    renderWarning() {
+        const query = this.props.query;
+        if (query.warnings && query.warnings.length) {
+            let warningCodes = [];
+            query.warnings.forEach(function(warning) {
+               warningCodes.push(warning.warningCode.name)
+            });
+
+            return (
+                <span className="glyphicon glyphicon-warning-sign query-warning" data-toggle="tooltip" title={warningCodes.join(', ')}/>
+            );
+        }
+    }
+
     render() {
         const query = this.props.query;
         const progressBarStyle = {width: getProgressBarPercentage(query) + "%", backgroundColor: getQueryStateColor(query)};
@@ -111,9 +125,9 @@ export class QueryListItem extends React.Component {
                     <span className="glyphicon glyphicon-fire" style={GLYPHICON_HIGHLIGHT}/>&nbsp;&nbsp;
                     {query.queryStats.peakUserMemoryReservation}
                 </span>
-                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Cumulative memory">
+                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Cumulative user memory">
                     <span className="glyphicon glyphicon-equalizer" style={GLYPHICON_HIGHLIGHT}/>&nbsp;&nbsp;
-                    {formatDataSizeBytes(query.queryStats.cumulativeUserMemory)}
+                    {formatDataSizeBytes(query.queryStats.cumulativeUserMemory / 1000.0)}
                 </span>
             </div>);
 
@@ -129,8 +143,9 @@ export class QueryListItem extends React.Component {
                 <div className="row">
                     <div className="col-xs-4">
                         <div className="row stat-row query-header query-header-queryid">
-                            <div className="col-xs-9" data-toggle="tooltip" data-placement="bottom" title="Query ID">
-                                <a href={"query.html?" + query.queryId} target="_blank">{query.queryId}</a>
+                            <div className="col-xs-9" data-placement="bottom">
+                                <a href={"query.html?" + query.queryId} target="_blank" data-toggle="tooltip" title="Query ID">{query.queryId}</a>
+                                {this.renderWarning()}
                             </div>
                             <div className="col-xs-3 query-header-timestamp" data-toggle="tooltip" data-placement="bottom" title="Submit time">
                                 <span>{formatShortTime(new Date(Date.parse(query.queryStats.createTime)))}</span>
@@ -310,6 +325,12 @@ export class QueryList extends React.Component {
                     return true;
                 }
 
+                return query.warnings.some(function (warning) {
+                    if ("warning".indexOf(term) !== -1 || warning.warningCode.name.toLowerCase().indexOf(term) !== -1 || warning.message.toLowerCase().indexOf(term) !== -1) {
+                        return true;
+                    }
+                });
+
             }, this);
         }
     }
@@ -469,7 +490,7 @@ export class QueryList extends React.Component {
             newSortOrder = SORT_ORDER.ASCENDING;
         }
 
-        const newDisplayedQueries = this.filterQueries(this.state.allQueries, this.state.stateFilters, this.state.searchString);
+        const newDisplayedQueries = this.filterQueries(this.state.allQueries, this.state.stateFilters, this.state.errorTypeFilters, this.state.searchString);
         this.sortAndLimitQueries(newDisplayedQueries, newSortType, newSortOrder, this.state.maxQueries);
 
         this.setState({
@@ -596,7 +617,7 @@ export class QueryList extends React.Component {
                                     {this.renderSortListItem(SORT_TYPE.CPU, "CPU Time")}
                                     {this.renderSortListItem(SORT_TYPE.EXECUTION, "Execution Time")}
                                     {this.renderSortListItem(SORT_TYPE.CURRENT_MEMORY, "Current Memory")}
-                                    {this.renderSortListItem(SORT_TYPE.CUMULATIVE_MEMORY, "Cumulative Memory")}
+                                    {this.renderSortListItem(SORT_TYPE.CUMULATIVE_MEMORY, "Cumulative User Memory")}
                                 </ul>
                             </div>
                             &nbsp;

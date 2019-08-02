@@ -26,8 +26,8 @@ import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spiller.SpillSpaceTracker;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.testing.PageConsumerOperator.PageConsumerOutputFactory;
 import com.facebook.presto.tpch.TpchConnectorFactory;
@@ -92,7 +92,7 @@ public class TestMemoryPools
         userPool = new MemoryPool(new MemoryPoolId("test"), TEN_MEGABYTES);
         fakeQueryId = new QueryId("fake");
         SpillSpaceTracker spillSpaceTracker = new SpillSpaceTracker(new DataSize(1, GIGABYTE));
-        DefaultQueryContext queryContext = new DefaultQueryContext(new QueryId("query"),
+        QueryContext queryContext = new QueryContext(new QueryId("query"),
                 TEN_MEGABYTES,
                 new DataSize(20, MEGABYTE),
                 userPool,

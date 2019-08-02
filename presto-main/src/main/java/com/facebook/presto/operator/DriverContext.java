@@ -19,7 +19,7 @@ import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.memory.QueryContextVisitor;
 import com.facebook.presto.memory.context.MemoryTrackingContext;
 import com.facebook.presto.operator.OperationTimer.OperationTiming;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -43,6 +43,7 @@ import static com.google.common.collect.Iterables.getLast;
 import static com.google.common.collect.Iterables.transform;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.succinctBytes;
+import static io.airlift.units.Duration.succinctNanos;
 import static java.lang.Math.max;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -316,12 +317,12 @@ public class DriverContext
         DataSize outputDataSize;
         long outputPositions;
         if (inputOperator != null) {
-            rawInputDataSize = inputOperator.getInputDataSize();
+            rawInputDataSize = inputOperator.getRawInputDataSize();
             rawInputPositions = inputOperator.getInputPositions();
             rawInputReadTime = inputOperator.getAddInputWall();
 
-            processedInputDataSize = inputOperator.getOutputDataSize();
-            processedInputPositions = inputOperator.getOutputPositions();
+            processedInputDataSize = inputOperator.getInputDataSize();
+            processedInputPositions = inputOperator.getInputPositions();
 
             OperatorStats outputOperator = requireNonNull(getLast(operators, null));
             outputDataSize = outputOperator.getOutputDataSize();
@@ -377,9 +378,9 @@ public class DriverContext
                 succinctBytes(driverMemoryContext.getUserMemory()),
                 succinctBytes(driverMemoryContext.getRevocableMemory()),
                 succinctBytes(driverMemoryContext.getSystemMemory()),
-                new Duration(totalScheduledTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
-                new Duration(totalCpuTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
-                new Duration(totalBlockedTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
+                succinctNanos(totalScheduledTime),
+                succinctNanos(totalCpuTime),
+                succinctNanos(totalBlockedTime),
                 blockedMonitor != null,
                 builder.build(),
                 rawInputDataSize.convertToMostSuccinctDataSize(),
